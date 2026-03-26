@@ -1,93 +1,145 @@
-# debian-ab-images
+# Debian 13 A/B Image System
 
+This project provides scripts to build Debian 13 (Trixie) A/B images designed for embedded systems or IoT devices that require atomic updates and persistent storage.
 
+## Features
 
-## Getting started
+- **A/B Partition Scheme**: Two root partitions for seamless updates
+- **Persistent Overlay**: Separate partition for persistent data storage
+- **LUKS Encryption**: Optional full disk encryption with auto-unlock capability
+- **Auto Expansion**: Automatically expands to fill the target disk on first boot
+- **RAUC Ready**: Pre-configured for atomic updates with RAUC
+- **Initramfs Support**: Custom initramfs modules for encryption auto-unlock
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Requirements
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin http://gitlab.homenet.com/devops/debian-ab-images.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-* [Set up project integrations](http://gitlab.homenet.com/devops/debian-ab-images/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Debian-based system (Debian, Ubuntu, etc.)
+- debootstrap
+- parted
+- cryptsetup (for encryption)
+- qemu-utils (for image creation)
+- sudo privileges
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd debian-ab-image
+
+# Make the build script executable
+chmod +x build-scripts/build-debian-ab.sh
+```
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Basic Image Creation
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```bash
+# Create a standard A/B image
+./build-scripts/build-debian-ab.sh
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+# Create with custom hostname and username
+./build-scripts/build-debian-ab.sh -h mydevice -u myuser
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+# Create with encryption
+./build-scripts/build-debian-ab.sh -e
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+# Create with custom size
+./build-scripts/build-debian-ab.sh -s 16G
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+### Deploying the Image
 
-## License
-For open source projects, say how it is licensed.
+```bash
+# Write to SD card or USB drive (replace sdX with actual device)
+sudo dd if=debian-trixie-ab.img of=/dev/sdX bs=4M status=progress oflag=sync
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+# Eject the device
+sudo eject /dev/sdX
+```
+
+## Architecture
+
+### Partition Layout
+
+1. **BIOS Boot Partition** (2MB): For GRUB bootloader
+2. **Boot Partition** (512MB): Shared between A/B systems
+3. **Root A Partition** (3GB): Primary root filesystem
+4. **Root B Partition** (3GB): Backup/Spare root filesystem for updates
+5. **Overlay Partition** (Remaining space): Persistent storage mounted at `/var/lib/overlay`
+
+### Overlay Filesystem Structure
+
+Persistent data is stored in the overlay partition, organized as follows:
+```
+/var/lib/overlay/
+├── upper/          # Upper layer for overlay mounts
+├── work/           # Work directory for overlay mounts
+└── persistent/     # Direct persistent data storage
+```
+
+### Encryption Implementation
+
+When encryption is enabled:
+- Both Root A and Root B partitions are LUKS encrypted
+- Encryption keys are managed through initramfs
+- Auto-unlock capability for headless systems
+
+### Auto Expansion
+
+On first boot after deployment:
+- The script automatically detects disk size
+- Expands the overlay partition to fill remaining space
+- Resizes the filesystem accordingly
+- Marks completion to prevent re-running
+
+### RAUC Integration
+
+RAUC configuration is pre-installed for atomic updates:
+- Configured for A/B update strategy
+- Certificate-based bundle verification
+- Compatible with standard RAUC update workflows
+
+## Customization
+
+You can modify the build script to:
+- Change default partition sizes
+- Add additional packages
+- Modify default user accounts
+- Customize system services
+- Adjust RAUC configuration
+
+## Update Process
+
+With RAUC, updates follow this workflow:
+1. Create RAUC update bundle
+2. Transfer bundle to device
+3. Install bundle with RAUC: `rauc install update-bundle.raucb`
+4. Reboot to activate new slot
+
+## Security Considerations
+
+- Default passwords should be changed after first boot
+- SSH keys should be updated for production use
+- Encryption keys must be properly secured
+- Firewall rules should be configured appropriately
+
+## Troubleshooting
+
+Common issues and solutions:
+
+### Device Not Booting
+- Check partition tables with `fdisk -l`
+- Verify bootloader installation
+- Ensure partition UUIDs match fstab entries
+
+### Overlay Not Mounting
+- Check overlay partition UUID in fstab
+- Verify partition exists with `blkid`
+- Ensure sufficient space on overlay partition
+
+### Encryption Issues
+- Confirm key files are properly stored in initramfs
+- Check LUKS header integrity with `cryptsetup luksDump`
+- Verify kernel modules for encryption are available
