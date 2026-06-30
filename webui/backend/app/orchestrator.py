@@ -32,6 +32,16 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str]:
     ]
     if opts.get("packages"):
         args += ["--packages", opts["packages"]]
+    if opts.get("ssh_key"):
+        args += ["--ssh-authorized-key", opts["ssh_key"]]
+    if opts.get("ssh_key_only"):
+        args += ["--ssh-key-only"]
+    if opts.get("encrypt"):
+        args += ["--encrypt",
+                 "--unlock", opts.get("unlock", "keyfile"),
+                 "--luks-passphrase", opts.get("luks_passphrase", "")]
+        if opts.get("unlock") == "tang" and opts.get("tang_url"):
+            args += ["--tang-url", opts["tang_url"]]
     out_name = f"debian-{opts.get('suite', 'trixie')}-ab.img"
     # Build context paths are read by the docker CLI inside THIS container
     # (PROJECT_DIR); bind-mount sources are resolved by the daemon on the HOST.

@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gdisk \
         dosfstools \
         e2fsprogs \
+        cryptsetup \
         rsync \
         zstd \
         gzip \
