@@ -16,6 +16,7 @@ and homelabs that need to provision many identical machines quickly and reliably
 | **builder/** | Produces a bootable Debian A/B disk image (`.img`) — two root slots, shared `/boot`, persistent overlay, GRUB+RAUC for atomic updates, first-boot auto-expand. Runs in Docker. |
 | **imager/** | Builds a tiny netboot environment (kernel + initramfs) that auto-detects a machine's disk, streams the image over HTTP, writes it, and reboots. |
 | **server/** | A Dockerized provisioning server: dnsmasq (proxyDHCP/DHCP + TFTP + iPXE) and nginx (serves the image). Plug machines into the switch, power on, walk away. |
+| **webui/** | An optional browser UI to manage everything — build images with a **live log**, manage the image library, configure/run the provisioning server, and **watch machines being imaged in real time**. |
 
 ```
                               ┌─────────── provisioning server (Docker) ───────────┐
@@ -82,6 +83,20 @@ and reboots into Debian A/B — no keyboard required. Watch progress with:
 make server-logs
 ```
 
+## Web UI (manage everything from the browser)
+
+Prefer a UI over the command line? Run the management console:
+
+```bash
+cd webui
+cp .env.example .env      # set ADMIN_PASSWORD and HOST_PROJECT_DIR (absolute path to this repo)
+docker compose up -d --build
+```
+
+Open **http://localhost:8080** to build images (with a live build log), manage the
+image library, configure and start the provisioning server, and watch machines get
+imaged in real time. See [docs/WEBUI.md](docs/WEBUI.md).
+
 ## DHCP modes
 
 Set `MODE` in `server/.env`:
@@ -104,6 +119,7 @@ network where you intend every PXE-booting machine to be re-imaged.
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit together
+- [docs/WEBUI.md](docs/WEBUI.md) — the browser-based management console
 - [docs/BUILDER.md](docs/BUILDER.md) — image build options and customization
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — provisioning server, DHCP modes, real-hardware + QEMU testing
 - [docs/UPDATES.md](docs/UPDATES.md) — RAUC atomic updates and A/B slot switching

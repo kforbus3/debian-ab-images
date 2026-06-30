@@ -12,8 +12,16 @@
 *.crt
 !server/**/*.conf
 
-# Local server config
+# Local config
 server/.env
+webui/.env
+
+# Web UI build artifacts
+node_modules/
+webui/frontend/dist/
+webui/frontend/.vite/
+__pycache__/
+*.pyc
 
 # OS / editor
 .DS_Store
