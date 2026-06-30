@@ -1,59 +1,44 @@
-# Makefile for Debian A/B Image System
+# Debian A/B Images — build & provisioning orchestration.
+.DEFAULT_GOAL := help
+OUTPUT ?= $(CURDIR)/output
 
-# Default target
-.PHONY: all
-all: build
-
-# Configuration
-BUILD_DIR := build-scripts
-CERTS_DIR := certs
-BUNDLES_DIR := bundles
-
-# Colors
-GREEN := $(shell tput -Txterm setaf 2)
-YELLOW := $(shell tput -Txterm setaf 3)
-RESET := $(shell tput -Txterm sgr0)
-
-# Targets
-.PHONY: build
-build:
-	@echo "$(GREEN)Building Debian A/B image...$(RESET)"
-	$(BUILD_DIR)/build-debian-ab.sh
-
-.PHONY: build-encrypted
-build-encrypted:
-	@echo "$(GREEN)Building encrypted Debian A/B image...$(RESET)"
-	$(BUILD_DIR)/build-debian-ab.sh -e
-
-.PHONY: certs
-certs:
-	@echo "$(GREEN)Generating RAUC certificates...$(RESET)"
-	$(BUILD_DIR)/generate-rauc-certs.sh
-
-.PHONY: clean
-clean:
-	@echo "$(YELLOW)Cleaning up...$(RESET)"
-	rm -f *.img
-	rm -rf $(CERTS_DIR)
-	rm -rf $(BUNDLES_DIR)
+# Image build options (override on the command line, e.g. `make image HOSTNAME=web01`)
+HOSTNAME ?= debian-ab
+USERNAME ?= debian
+PASSWORD ?= debian
+IMAGE_SIZE ?= 8
+ROOT_SIZE ?= 3072
+COMPRESS ?= zstd
 
 .PHONY: help
-help:
-	@echo "Debian A/B Image System Makefile"
-	@echo ""
-	@echo "Targets:"
-	@echo "  build           Build standard Debian A/B image"
-	@echo "  build-encrypted Build encrypted Debian A/B image"
-	@echo "  certs           Generate RAUC certificates"
-	@echo "  clean           Remove generated images and certificates"
-	@echo "  help            Show this help message"
-	@echo ""
-	@echo "For more options, run the scripts directly:"
-	@echo "  $(BUILD_DIR)/build-debian-ab.sh --help"
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
-# Document targets
-$(BUILD_DIR)/build-debian-ab.sh:
-	@echo "$(YELLOW)Build script not found. Please check the build-scripts directory.$(RESET)"
+.PHONY: image
+image: ## Build the A/B disk image into ./output
+	./builder/run.sh --hostname $(HOSTNAME) --username $(USERNAME) --password '$(PASSWORD)' \
+	  --image-size $(IMAGE_SIZE) --root-size $(ROOT_SIZE) --compress $(COMPRESS)
 
-$(BUILD_DIR)/generate-rauc-certs.sh:
-	@echo "$(YELLOW)Certificate generation script not found. Please check the build-scripts directory.$(RESET)"
+.PHONY: imager
+imager: ## Build the netboot imager (kernel + initramfs) into ./output/imager
+	./imager/run.sh
+
+.PHONY: server-up
+server-up: ## Start the PXE/HTTP provisioning server (needs server/.env)
+	cd server && docker compose up -d --build
+
+.PHONY: server-down
+server-down: ## Stop the provisioning server
+	cd server && docker compose down
+
+.PHONY: server-logs
+server-logs: ## Follow provisioning server logs
+	cd server && docker compose logs -f
+
+.PHONY: all
+all: image imager ## Build both the A/B image and the imager
+
+.PHONY: clean
+clean: ## Remove build artifacts
+	rm -rf $(OUTPUT)

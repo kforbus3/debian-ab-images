@@ -1,0 +1,14 @@
+[Unit]
+Description=Grow overlay partition to fill disk on first boot
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+ConditionPathExists=!/var/lib/first-boot-expand.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/first-boot-expand.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

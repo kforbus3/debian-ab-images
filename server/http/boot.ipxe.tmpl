@@ -1,0 +1,15 @@
+#!ipxe
+# Rendered from environment by the HTTP container entrypoint.
+echo
+echo ====================================================
+echo   Debian A/B Network Imager
+echo   Server : ${SERVER_IP}
+echo   Image  : ${IMAGE_FILE}
+echo   Action : ${ACTION} after imaging
+echo ====================================================
+echo Booting the imager... this machine's disk will be re-imaged.
+echo
+
+kernel http://${SERVER_IP}/imager/vmlinuz imager.url=http://${SERVER_IP}/images/${IMAGE_FILE} imager.action=${ACTION} imager.compress=auto console=tty0 console=ttyS0,115200
+initrd http://${SERVER_IP}/imager/initramfs.img
+boot
