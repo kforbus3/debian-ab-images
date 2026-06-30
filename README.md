@@ -1,145 +1,120 @@
-# Debian 13 A/B Image System
+# Debian A/B Images
 
-This project provides scripts to build Debian 13 (Trixie) A/B images designed for embedded systems or IoT devices that require atomic updates and persistent storage.
+Build a Debian A/B (dual-root) disk image once, then **netboot a whole switch full
+of machines and image them all at once** — unattended. Designed for IT departments
+and homelabs that need to provision many identical machines quickly and reliably.
 
-## Features
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
-- **A/B Partition Scheme**: Two root partitions for seamless updates
-- **Persistent Overlay**: Separate partition for persistent data storage
-- **LUKS Encryption**: Optional full disk encryption with auto-unlock capability
-- **Auto Expansion**: Automatically expands to fill the target disk on first boot
-- **RAUC Ready**: Pre-configured for atomic updates with RAUC
-- **Initramfs Support**: Custom initramfs modules for encryption auto-unlock
+---
+
+## What you get
+
+| Component | What it does |
+|-----------|--------------|
+| **builder/** | Produces a bootable Debian A/B disk image (`.img`) — two root slots, shared `/boot`, persistent overlay, GRUB+RAUC for atomic updates, first-boot auto-expand. Runs in Docker. |
+| **imager/** | Builds a tiny netboot environment (kernel + initramfs) that auto-detects a machine's disk, streams the image over HTTP, writes it, and reboots. |
+| **server/** | A Dockerized provisioning server: dnsmasq (proxyDHCP/DHCP + TFTP + iPXE) and nginx (serves the image). Plug machines into the switch, power on, walk away. |
+
+```
+                              ┌─────────── provisioning server (Docker) ───────────┐
+   [ switch ]                 │  dnsmasq  ── proxyDHCP/DHCP + TFTP + iPXE chainload  │
+   machine 1  ──PXE boot──▶   │  nginx    ── serves imager kernel/initramfs + image │
+   machine 2  ──PXE boot──▶   └────────────────────────────────────────────────────┘
+   machine N  ──PXE boot──▶          │
+        ▲                            ▼
+        │                    each machine boots the imager, which
+        └──── reboots ◀──────  writes the A/B image to its local disk
+              into Debian A/B
+```
+
+## The A/B image layout
+
+```
+GPT:
+  p1  bios_grub   1 MiB    GRUB core
+  p2  BOOT        512 MiB  shared /boot, kernel, grubenv   (label BOOT)
+  p3  rootfs-a    N GiB    root slot A (Debian)            (label rootfs-a)
+  p4  rootfs-b    N GiB    root slot B (copy of A)         (label rootfs-b)
+  p5  overlay     rest     persistent data /var/lib/overlay (grows on first boot)
+```
+
+- **A/B roots** let you update atomically: write the inactive slot, flip the
+  GRUB boot order, reboot. Both slots are populated at build time.
+- **GRUB + RAUC** integration: slot selection lives in `grubenv`; [RAUC](https://rauc.io/)
+  is preconfigured (`compatible=debian-ab`) for signed bundle updates.
+- **Persistent overlay** survives slot updates and **auto-expands** to fill the
+  target disk on first boot — so the same image works on any disk size.
+
+## Quick start
+
+### 1. Build the image
+
+```bash
+make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123' IMAGE_SIZE=8
+# → output/debian-trixie-ab.img.zst
+```
+
+### 2. Build the netboot imager
+
+```bash
+make imager
+# → output/imager/{vmlinuz,initramfs.img}
+```
+
+### 3. Start the provisioning server
+
+```bash
+cd server
+cp .env.example .env
+# Edit .env: set SERVER_IP, IMAGE_FILE, and MODE (proxy or dhcp).
+docker compose up -d --build
+```
+
+### 4. Image the machines
+
+Plug the target machines into the same switch, set them to **network boot** (PXE),
+and power them on. Each one boots the imager, writes the image to its local disk,
+and reboots into Debian A/B — no keyboard required. Watch progress with:
+
+```bash
+make server-logs
+```
+
+## DHCP modes
+
+Set `MODE` in `server/.env`:
+
+- **`proxy`** (default) — *coexists* with an existing DHCP server/router on the
+  LAN via proxyDHCP. It only answers PXE boot questions; your router still hands
+  out IPs. Best for most homelab/office networks.
+- **`dhcp`** — *standalone*. The server runs full DHCP and hands out IPs itself.
+  Best for an isolated/dedicated provisioning switch.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full configuration.
+
+## Safety
+
+Network imaging **overwrites the target disk**. The imager selects the largest
+non-removable disk by default; pin a specific disk with `imager.disk=/dev/sdX`
+(see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)). Only run the provisioning server on a
+network where you intend every PXE-booting machine to be re-imaged.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit together
+- [docs/BUILDER.md](docs/BUILDER.md) — image build options and customization
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — provisioning server, DHCP modes, real-hardware + QEMU testing
+- [docs/UPDATES.md](docs/UPDATES.md) — RAUC atomic updates and A/B slot switching
+- [docs/SECURITY.md](docs/SECURITY.md) — secrets, signing, network exposure
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Requirements
 
-- Debian-based system (Debian, Ubuntu, etc.)
-- debootstrap
-- parted
-- cryptsetup (for encryption)
-- qemu-utils (for image creation)
-- sudo privileges
+- A Linux host with Docker (the builder needs `--privileged` for loop devices).
+- For the provisioning server: a host on the imaging LAN (host networking).
 
-## Installation
+## License
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd debian-ab-image
-
-# Make the build script executable
-chmod +x build-scripts/build-debian-ab.sh
-```
-
-## Usage
-
-### Basic Image Creation
-
-```bash
-# Create a standard A/B image
-./build-scripts/build-debian-ab.sh
-
-# Create with custom hostname and username
-./build-scripts/build-debian-ab.sh -h mydevice -u myuser
-
-# Create with encryption
-./build-scripts/build-debian-ab.sh -e
-
-# Create with custom size
-./build-scripts/build-debian-ab.sh -s 16G
-```
-
-### Deploying the Image
-
-```bash
-# Write to SD card or USB drive (replace sdX with actual device)
-sudo dd if=debian-trixie-ab.img of=/dev/sdX bs=4M status=progress oflag=sync
-
-# Eject the device
-sudo eject /dev/sdX
-```
-
-## Architecture
-
-### Partition Layout
-
-1. **BIOS Boot Partition** (2MB): For GRUB bootloader
-2. **Boot Partition** (512MB): Shared between A/B systems
-3. **Root A Partition** (3GB): Primary root filesystem
-4. **Root B Partition** (3GB): Backup/Spare root filesystem for updates
-5. **Overlay Partition** (Remaining space): Persistent storage mounted at `/var/lib/overlay`
-
-### Overlay Filesystem Structure
-
-Persistent data is stored in the overlay partition, organized as follows:
-```
-/var/lib/overlay/
-├── upper/          # Upper layer for overlay mounts
-├── work/           # Work directory for overlay mounts
-└── persistent/     # Direct persistent data storage
-```
-
-### Encryption Implementation
-
-When encryption is enabled:
-- Both Root A and Root B partitions are LUKS encrypted
-- Encryption keys are managed through initramfs
-- Auto-unlock capability for headless systems
-
-### Auto Expansion
-
-On first boot after deployment:
-- The script automatically detects disk size
-- Expands the overlay partition to fill remaining space
-- Resizes the filesystem accordingly
-- Marks completion to prevent re-running
-
-### RAUC Integration
-
-RAUC configuration is pre-installed for atomic updates:
-- Configured for A/B update strategy
-- Certificate-based bundle verification
-- Compatible with standard RAUC update workflows
-
-## Customization
-
-You can modify the build script to:
-- Change default partition sizes
-- Add additional packages
-- Modify default user accounts
-- Customize system services
-- Adjust RAUC configuration
-
-## Update Process
-
-With RAUC, updates follow this workflow:
-1. Create RAUC update bundle
-2. Transfer bundle to device
-3. Install bundle with RAUC: `rauc install update-bundle.raucb`
-4. Reboot to activate new slot
-
-## Security Considerations
-
-- Default passwords should be changed after first boot
-- SSH keys should be updated for production use
-- Encryption keys must be properly secured
-- Firewall rules should be configured appropriately
-
-## Troubleshooting
-
-Common issues and solutions:
-
-### Device Not Booting
-- Check partition tables with `fdisk -l`
-- Verify bootloader installation
-- Ensure partition UUIDs match fstab entries
-
-### Overlay Not Mounting
-- Check overlay partition UUID in fstab
-- Verify partition exists with `blkid`
-- Ensure sufficient space on overlay partition
-
-### Encryption Issues
-- Confirm key files are properly stored in initramfs
-- Check LUKS header integrity with `cryptsetup luksDump`
-- Verify kernel modules for encryption are available
+Licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
