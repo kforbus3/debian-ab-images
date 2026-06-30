@@ -22,4 +22,6 @@ services:
     env_file: .env
     volumes:
       # Built artifacts: the A/B image(s) and the imager kernel/initramfs.
-      - ../output:/data:ro
+      # HOST_OUTPUT_DIR lets the web UI control this stack via the Docker socket
+      # with a correct absolute host path; it defaults to the local ./output.
+      - ${HOST_OUTPUT_DIR:-../output}:/data:ro

@@ -1,0 +1,21 @@
+# Web management UI for Debian A/B Images.
+#
+# HOST_PROJECT_DIR must be the ABSOLUTE host path to this repository, so the UI
+# can run the builder/imager/server containers with correct bind-mount paths
+# through the Docker socket. Set it in webui/.env (see .env.example).
+services:
+  webui:
+    build: .
+    image: debian-ab-webui
+    container_name: debian-ab-webui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - SECRET_KEY=${SECRET_KEY:-please-change-me}
+      - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:?Set HOST_PROJECT_DIR to this repo's absolute host path}
+      - PROJECT_DIR=/project
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOST_PROJECT_DIR}:/project
