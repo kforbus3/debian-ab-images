@@ -33,10 +33,23 @@ requests) and restrict it to one interface with `INTERFACE=`.
 
 ## Disk encryption
 
-The current image does not enable LUKS by default. If you require encryption at
-rest, add `cryptsetup`-based setup in `builder/overlay` and an initramfs unlock
-mechanism appropriate to your threat model (TPM-bound keys are preferable to
-keys stored on an unencrypted `/boot`).
+Optional LUKS2 encryption (`--encrypt`) covers both root slots and the overlay
+(`/boot` stays plaintext for GRUB). Choose an unlock method by threat model
+(`--unlock`):
+
+- **`tpm2`** — key sealed to the machine's TPM; never on disk. Best where a TPM
+  exists.
+- **`tang`** — key fetched from a Tang server on a trusted LAN (NBDE); never on
+  disk. Best no-TPM auto-unlock.
+- **`keyfile`** — key embedded in the initramfs on the same disk. Convenient and
+  universal, but provides **weak at-rest protection** (pulling the disk yields
+  the key). Prefer `tpm2`/`tang` for real protection.
+- **`passphrase`** — prompt at boot; most secure, not unattended.
+
+For `tpm2`/`tang`, a bootstrap keyfile makes the first boot unattended, then a
+first-boot service enrolls the TPM/Tang and **destroys the keyfile**, leaving no
+key on disk. The `--luks-passphrase` you supply is always kept as a recovery key —
+store it safely. See [BUILDER.md](BUILDER.md#disk-encryption-luks2).
 
 ## Reporting a vulnerability
 
