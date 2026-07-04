@@ -29,7 +29,7 @@ die()  { echo "${RED}[imager] FATAL:${NC} $*"; echo "Dropping to a shell."; exec
 banner() {
     echo
     echo "  ┌──────────────────────────────────────────┐"
-    echo "  │   Debian A/B Network Imager                │"
+    echo "  │   A/B Network Imager                       │"
     echo "  └──────────────────────────────────────────┘"
     echo
 }
@@ -116,11 +116,31 @@ if [ "$WIPE" = "1" ]; then
     $BB dd if=/dev/zero of="$TARGET" bs=1M count=16 conv=fsync 2>/dev/null || true
 fi
 
+# --- Fetch the expected checksum (the builder publishes <image>.sha256) ---
+SHA_EXPECT="$($BB wget -q -O - "${IMG_URL}.sha256" 2>/dev/null | $BB awk '{print $1}')" || true
+
 # --- Stream the image to disk ---
 say "Writing image to ${TARGET}"
 say "Source: ${IMG_URL}"
 echo "${YEL}  This can take a few minutes; do not power off.${NC}"
-$BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+if [ -n "$SHA_EXPECT" ]; then
+    # Hash the compressed stream in flight via a fifo; a truncated or corrupted
+    # download then fails loudly instead of leaving a silently broken disk.
+    $BB mkfifo /tmp/hashpipe
+    $BB sha256sum /tmp/hashpipe > /tmp/hash.out &
+    HASHPID=$!
+    $BB wget -O - "$IMG_URL" | $BB tee /tmp/hashpipe | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+    wait $HASHPID
+    SHA_ACTUAL="$($BB awk '{print $1}' /tmp/hash.out)"
+    if [ "$SHA_ACTUAL" = "$SHA_EXPECT" ]; then
+        say "${GRN}Download SHA256 verified.${NC}"
+    else
+        die "SHA256 mismatch (got ${SHA_ACTUAL:-nothing}, expected ${SHA_EXPECT}) — download truncated or corrupt; NOT rebooting"
+    fi
+else
+    warn "No ${IMG_URL}.sha256 on the server; skipping download verification"
+    $BB wget -O - "$IMG_URL" | $DECOMP | $BB dd of="$TARGET" bs=4M conv=fsync 2>&1
+fi
 $BB sync
 
 # Integrity check: a GPT image must leave the "EFI PART" signature at LBA1.

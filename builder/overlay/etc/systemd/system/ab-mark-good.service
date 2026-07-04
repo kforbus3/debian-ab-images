@@ -1,0 +1,13 @@
+[Unit]
+Description=Mark booted A/B slot as good (reset GRUB try counter)
+# Only once the system has actually come up healthy; /boot holds grubenv.
+After=multi-user.target boot.mount
+RequiresMountsFor=/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ab-mark-good.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

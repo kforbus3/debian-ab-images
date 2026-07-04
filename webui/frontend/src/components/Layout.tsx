@@ -1,12 +1,13 @@
 import { ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Hammer, HardDrive, Network, LogOut, Boxes } from "lucide-react";
+import { LayoutDashboard, Hammer, HardDrive, ListChecks, Network, LogOut, Boxes } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/build", label: "Build Image", icon: Hammer },
   { to: "/images", label: "Images", icon: HardDrive },
+  { to: "/jobs", label: "Jobs", icon: ListChecks },
   { to: "/provisioning", label: "Provisioning", icon: Network },
 ];
 

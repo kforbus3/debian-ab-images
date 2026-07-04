@@ -5,8 +5,8 @@ imager, and **serve** them to machines over the network.
 
 ## 1. Builder (`builder/`)
 
-A privileged Docker container that produces a bootable Debian A/B disk image with
-`debootstrap`.
+A privileged Docker container that produces a bootable Debian or Ubuntu A/B disk
+image with `debootstrap`.
 
 Flow (`build-image.sh`):
 1. Create a sparse image file and partition it (GPT) with a BIOS-GRUB partition,

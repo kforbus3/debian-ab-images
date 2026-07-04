@@ -3,7 +3,10 @@
 OUTPUT ?= $(CURDIR)/output
 
 # Image build options (override on the command line, e.g. `make image HOSTNAME=web01`)
-HOSTNAME ?= debian-ab
+# SUITE picks the release; the distro is auto-detected from it
+# (trixie/bookworm -> Debian, noble/jammy -> Ubuntu).
+SUITE ?= trixie
+HOSTNAME ?=
 USERNAME ?= debian
 PASSWORD ?= debian
 IMAGE_SIZE ?= 8
@@ -16,8 +19,9 @@ help: ## Show this help
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: image
-image: ## Build the A/B disk image into ./output
-	./builder/run.sh --hostname $(HOSTNAME) --username $(USERNAME) --password '$(PASSWORD)' \
+image: ## Build the A/B disk image into ./output (SUITE=trixie|bookworm|noble|jammy)
+	./builder/run.sh --suite $(SUITE) $(if $(HOSTNAME),--hostname $(HOSTNAME)) \
+	  --username $(USERNAME) --password '$(PASSWORD)' \
 	  --image-size $(IMAGE_SIZE) --root-size $(ROOT_SIZE) --compress $(COMPRESS)
 
 .PHONY: imager

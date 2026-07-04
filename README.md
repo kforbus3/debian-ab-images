@@ -1,8 +1,9 @@
 # Debian A/B Images
 
-Build a Debian A/B (dual-root) disk image once, then **netboot a whole switch full
-of machines and image them all at once** — unattended. Designed for IT departments
-and homelabs that need to provision many identical machines quickly and reliably.
+Build a Debian or Ubuntu A/B (dual-root) disk image once, then **netboot a whole
+switch full of machines and image them all at once** — unattended. Designed for IT
+departments and homelabs that need to provision many identical machines quickly
+and reliably.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -13,7 +14,7 @@ and homelabs that need to provision many identical machines quickly and reliably
 
 | Component | What it does |
 |-----------|--------------|
-| **builder/** | Produces a bootable Debian A/B disk image (`.img`) — two root slots, shared `/boot`, persistent overlay, GRUB+RAUC for atomic updates, first-boot auto-expand. Runs in Docker. |
+| **builder/** | Produces a bootable Debian **or Ubuntu** A/B disk image (`.img`) — two root slots, shared `/boot`, persistent overlay, GRUB+RAUC for atomic updates, first-boot auto-expand. Runs in Docker. |
 | **imager/** | Builds a tiny netboot environment (kernel + initramfs) that auto-detects a machine's disk, streams the image over HTTP, writes it, and reboots. |
 | **server/** | A Dockerized provisioning server: dnsmasq (proxyDHCP/DHCP + TFTP + iPXE) and nginx (serves the image). Plug machines into the switch, power on, walk away. |
 | **webui/** | An optional browser UI to manage everything — build images with a **live log**, manage the image library, configure/run the provisioning server, and **watch machines being imaged in real time**. |
@@ -36,7 +37,7 @@ and homelabs that need to provision many identical machines quickly and reliably
 GPT:
   p1  bios_grub   1 MiB    GRUB core
   p2  BOOT        512 MiB  shared /boot, kernel, grubenv   (label BOOT)
-  p3  rootfs-a    N GiB    root slot A (Debian)            (label rootfs-a)
+  p3  rootfs-a    N GiB    root slot A (Debian/Ubuntu)     (label rootfs-a)
   p4  rootfs-b    N GiB    root slot B (copy of A)         (label rootfs-b)
   p5  overlay     rest     persistent data /var/lib/overlay (grows on first boot)
 ```
@@ -44,7 +45,7 @@ GPT:
 - **A/B roots** let you update atomically: write the inactive slot, flip the
   GRUB boot order, reboot. Both slots are populated at build time.
 - **GRUB + RAUC** integration: slot selection lives in `grubenv`; [RAUC](https://rauc.io/)
-  is preconfigured (`compatible=debian-ab`) for signed bundle updates.
+  is preconfigured (`compatible=<distro>-ab`) for signed bundle updates.
 - **Persistent overlay** survives slot updates and **auto-expands** to fill the
   target disk on first boot — so the same image works on any disk size.
 
@@ -55,7 +56,14 @@ GPT:
 ```bash
 make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123' IMAGE_SIZE=8
 # → output/debian-trixie-ab.img.zst
+
+# Ubuntu instead? Pick an Ubuntu release with SUITE:
+make image SUITE=noble HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123'
+# → output/ubuntu-noble-ab.img.zst
 ```
+
+Supported releases: Debian `trixie` (13) and `bookworm` (12); Ubuntu `noble`
+(24.04 LTS) and `jammy` (22.04 LTS).
 
 ### 2. Build the netboot imager
 
@@ -77,7 +85,7 @@ docker compose up -d --build
 
 Plug the target machines into the same switch, set them to **network boot** (PXE),
 and power them on. Each one boots the imager, writes the image to its local disk,
-and reboots into Debian A/B — no keyboard required. Watch progress with:
+and reboots into the A/B system — no keyboard required. Watch progress with:
 
 ```bash
 make server-logs

@@ -1,23 +1,25 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { HardDrive, Cpu, Network, Hammer } from "lucide-react";
-import { api } from "../lib/api";
+import { HardDrive, Cpu, Network, Hammer, Database } from "lucide-react";
+import { api, fmtBytes } from "../lib/api";
 import { Card, PageHeader, Badge } from "../components/ui";
 
 export default function Dashboard() {
   const [images, setImages] = useState<any[]>([]);
   const [imagerReady, setImagerReady] = useState(false);
   const [server, setServer] = useState<{ running: boolean } | null>(null);
+  const [disk, setDisk] = useState<{ artifacts: number; free: number } | null>(null);
 
   useEffect(() => {
     api.get("/images").then((r) => { setImages(r.data.images); setImagerReady(r.data.imager_ready); }).catch(() => {});
     api.get("/server/status").then((r) => setServer(r.data)).catch(() => setServer({ running: false }));
+    api.get("/images/disk").then((r) => setDisk(r.data)).catch(() => {});
   }, []);
 
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Build images and provision machines over the network" />
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Card className="p-5">
           <div className="flex items-center justify-between"><HardDrive className="text-brand-400" size={22} /><span className="text-3xl font-semibold">{images.length}</span></div>
           <p className="mt-2 text-sm text-zinc-400">Built images</p>
@@ -29,6 +31,12 @@ export default function Dashboard() {
         <Card className="p-5">
           <div className="flex items-center justify-between"><Network className="text-emerald-400" size={22} />{server?.running ? <Badge color="green">running</Badge> : <Badge color="zinc">stopped</Badge>}</div>
           <p className="mt-2 text-sm text-zinc-400">Provisioning server</p>
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center justify-between"><Database className="text-amber-400" size={22} />
+            <span className="text-right text-sm font-semibold">{disk ? fmtBytes(disk.artifacts) : "—"}</span>
+          </div>
+          <p className="mt-2 text-sm text-zinc-400">Artifacts on disk{disk && <span className="text-zinc-500"> · {fmtBytes(disk.free)} free</span>}</p>
         </Card>
       </div>
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">

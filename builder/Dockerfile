@@ -1,9 +1,10 @@
-# Builder image: produces a Debian A/B disk image.
+# Builder image: produces a Debian or Ubuntu A/B disk image.
 # Must be run with --privileged (loop devices, mounts) and an /output volume.
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         debootstrap \
+        ubuntu-keyring \
         parted \
         gdisk \
         dosfstools \

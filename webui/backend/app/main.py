@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -14,10 +13,9 @@ from app.routers import auth, builds, images, server
 
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__), "..", "static"))
 
+# The SPA is served same-origin (and the vite dev server proxies /api), so no
+# CORS policy is needed — browsers then refuse cross-origin API use outright.
 app = FastAPI(title="Debian A/B Images UI", version=__version__)
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
 
 
 @app.get("/api/health")

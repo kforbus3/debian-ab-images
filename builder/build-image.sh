@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build a bootable Debian A/B disk image (optionally LUKS-encrypted).
+# Build a bootable Debian or Ubuntu A/B disk image (optionally LUKS-encrypted).
 #
 # Layout (GPT, BIOS/GRUB):
 #   p1  bios_grub  (1 MiB, raw)        GRUB core
@@ -13,16 +13,17 @@
 set -euo pipefail
 
 # --- Defaults (override via flags or environment) ---
+DISTRO="${DISTRO:-}"                    # debian | ubuntu (empty = auto-detect from suite)
 SUITE="${SUITE:-trixie}"
 ARCH="${ARCH:-amd64}"
-MIRROR="${MIRROR:-http://deb.debian.org/debian}"
-HOSTNAME_="${HOSTNAME_:-debian-ab}"
+MIRROR="${MIRROR:-}"                    # empty = distro default
+HOSTNAME_="${HOSTNAME_:-}"              # empty = <distro>-ab
 USERNAME="${USERNAME:-debian}"
 PASSWORD="${PASSWORD:-debian}"
 ROOT_SIZE="${ROOT_SIZE:-3072}"
 BOOT_SIZE="${BOOT_SIZE:-512}"
 IMAGE_SIZE="${IMAGE_SIZE:-8}"
-OUTPUT="${OUTPUT:-/output/debian-${SUITE}-ab.img}"
+OUTPUT="${OUTPUT:-}"                    # empty = /output/<distro>-<suite>-ab.img
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
 SSH_PUBKEY="${SSH_PUBKEY:-}"
 SSH_KEY_ONLY="${SSH_KEY_ONLY:-false}"
@@ -36,8 +37,10 @@ TANG_URL="${TANG_URL:-}"
 usage() {
     cat <<EOF
 Usage: $0 [options]
-  --suite NAME            Debian suite (default: $SUITE)
+  --distro NAME           debian|ubuntu (default: auto-detect from --suite)
+  --suite NAME            Debian/Ubuntu suite (default: $SUITE; e.g. trixie, bookworm, noble, jammy)
   --arch ARCH             Architecture (default: $ARCH)
+  --mirror URL            APT mirror (default: distro's primary mirror)
   --hostname NAME         Image hostname (default: $HOSTNAME_)
   --username NAME         Login user to create (default: $USERNAME)
   --password PASS         Password for that user (default: $USERNAME)
@@ -59,8 +62,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --distro) DISTRO="$2"; shift 2;;
         --suite) SUITE="$2"; shift 2;;
         --arch) ARCH="$2"; shift 2;;
+        --mirror) MIRROR="$2"; shift 2;;
         --hostname) HOSTNAME_="$2"; shift 2;;
         --username) USERNAME="$2"; shift 2;;
         --password) PASSWORD="$2"; shift 2;;
@@ -84,6 +89,44 @@ done
 log()  { echo -e "\033[0;32m[build]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[build]\033[0m $*"; }
 die()  { echo -e "\033[0;31m[build] ERROR:\033[0m $*" >&2; exit 1; }
+
+# --- Resolve distro (auto-detect from suite when not given) ---
+if [ -z "$DISTRO" ]; then
+    case "$SUITE" in
+        bionic|focal|jammy|noble|oracular|plucky|questing) DISTRO=ubuntu;;
+        *) DISTRO=debian;;
+    esac
+fi
+case "$DISTRO" in
+    debian)
+        MIRROR="${MIRROR:-http://deb.debian.org/debian}"
+        KERNEL_PKG="linux-image-${ARCH}"
+        DEBOOTSTRAP_OPTS=""
+        ;;
+    ubuntu)
+        MIRROR="${MIRROR:-http://archive.ubuntu.com/ubuntu}"
+        # Ubuntu's generic kernel (linux-image-<arch> is Debian-only); rauc lives
+        # in universe, so debootstrap and APT must enable it.
+        KERNEL_PKG="linux-image-generic"
+        DEBOOTSTRAP_OPTS="--components=main,universe"
+        [ -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ] && \
+            DEBOOTSTRAP_OPTS="$DEBOOTSTRAP_OPTS --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+        # Newer Ubuntu suites may postdate the builder's debootstrap; every Ubuntu
+        # suite script is a symlink to the generic 'gutsy' script anyway.
+        if [ ! -e "/usr/share/debootstrap/scripts/$SUITE" ] && [ -e /usr/share/debootstrap/scripts/gutsy ]; then
+            ln -s gutsy "/usr/share/debootstrap/scripts/$SUITE"
+        fi
+        ;;
+    *) die "--distro must be debian or ubuntu";;
+esac
+OS_PRETTY="$(tr '[:lower:]' '[:upper:]' <<< "${DISTRO:0:1}")${DISTRO:1}"
+HOSTNAME_="${HOSTNAME_:-${DISTRO}-ab}"
+OUTPUT="${OUTPUT:-/output/${DISTRO}-${SUITE}-ab.img}"
+
+# systemd-resolved became a separate package in Debian 12 / Ubuntu 23.10; on
+# older suites it ships inside systemd itself.
+RESOLVED_PKG="systemd-resolved"
+case "$SUITE" in bionic|focal|jammy) RESOLVED_PKG="";; esac
 
 # --- Validate options ---
 if [ "$SSH_KEY_ONLY" = true ] && [ -z "$SSH_PUBKEY" ]; then
@@ -125,7 +168,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "Building image  encrypt=$ENCRYPT  unlock=$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo n/a)  ssh-key-only=$SSH_KEY_ONLY"
+log "Building image  distro=$DISTRO suite=$SUITE  encrypt=$ENCRYPT  unlock=$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo n/a)  ssh-key-only=$SSH_KEY_ONLY"
 rm -f "$RAW"
 truncate -s "${IMAGE_SIZE}G" "$RAW"
 
@@ -197,8 +240,8 @@ mkdir -p "$BOOTMNT" "$MNT/var/lib/overlay"
 mount "$P_BOOT" "$BOOTMNT"
 mount "$DEV_OVL" "$MNT/var/lib/overlay"
 
-log "Bootstrapping Debian $SUITE ($ARCH)"
-debootstrap --arch="$ARCH" --variant=minbase \
+log "Bootstrapping $OS_PRETTY $SUITE ($ARCH)"
+debootstrap --arch="$ARCH" --variant=minbase $DEBOOTSTRAP_OPTS \
     --include=systemd-sysv,ifupdown,netbase \
     "$SUITE" "$MNT" "$MIRROR"
 
@@ -225,11 +268,19 @@ LABEL=overlay              /var/lib/overlay   ext4   defaults,nofail 0     2
 tmpfs                      /tmp               tmpfs  defaults       0      0
 EOF
 
-cat > "$MNT/etc/apt/sources.list" <<EOF
+if [ "$DISTRO" = ubuntu ]; then
+    cat > "$MNT/etc/apt/sources.list" <<EOF
+deb $MIRROR $SUITE main universe
+deb $MIRROR ${SUITE}-updates main universe
+deb http://security.ubuntu.com/ubuntu ${SUITE}-security main universe
+EOF
+else
+    cat > "$MNT/etc/apt/sources.list" <<EOF
 deb $MIRROR $SUITE main contrib non-free-firmware
 deb $MIRROR ${SUITE}-updates main contrib non-free-firmware
 deb http://security.debian.org/debian-security ${SUITE}-security main contrib non-free-firmware
 EOF
+fi
 
 cat > "$MNT/etc/systemd/network/10-dhcp.network" <<EOF
 [Match]
@@ -280,10 +331,12 @@ cat > "$MNT/tmp/setup.sh" <<CHROOT
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
+# initramfs-tools is explicit: Debian kernels depend on it, Ubuntu kernels only
+# recommend it, and without it no initrd.img is generated for GRUB to load.
 apt-get install -y --no-install-recommends \
-    linux-image-${ARCH} grub-pc grub-pc-bin \
+    ${KERNEL_PKG} initramfs-tools grub-pc grub-pc-bin \
     openssh-server sudo ca-certificates \
-    systemd-resolved cloud-guest-utils gdisk parted e2fsprogs \
+    ${RESOLVED_PKG} cloud-guest-utils gdisk parted e2fsprogs \
     rauc ${CRYPT_PACKAGES} ${EXTRA_PACKAGES}
 systemctl enable ssh systemd-networkd systemd-resolved
 
@@ -316,8 +369,11 @@ fi
 log "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
 cp -a "$OVERLAY_DIR"/etc/. "$MNT/etc/"
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
-chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh"
-chroot "$MNT" systemctl enable first-boot-expand.service
+# RAUC bundles are only accepted by systems with a matching compatible string.
+sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
+chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
+         "$MNT/usr/local/sbin/ab-mark-good.sh"
+chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service
 
 [ -f "$MNT/etc/rauc/keyring.pem" ] || cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null || touch "$MNT/etc/rauc/keyring.pem"
 
@@ -352,7 +408,8 @@ chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$L
 KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | head -n1)"
 [ -n "$KVER" ] || die "no kernel found on BOOT partition"
 log "Kernel version: $KVER"
-sed "s/__KVER__/$KVER/g" "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
+sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" \
+    "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
 chroot "$MNT" grub-editenv /boot/grub/grubenv create
 chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" A_TRY=0 B_TRY=0
 
@@ -381,6 +438,24 @@ case "$COMPRESS" in
     *) warn "Unknown compression '$COMPRESS', leaving raw"; OUT="$RAW";;
 esac
 
+log "Writing SHA256 checksum and metadata sidecars"
+( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" )
+cat > "${OUT}.json" <<EOF
+{
+  "distro": "$DISTRO",
+  "suite": "$SUITE",
+  "arch": "$ARCH",
+  "hostname": "$HOSTNAME_",
+  "username": "$USERNAME",
+  "image_size_gib": $IMAGE_SIZE,
+  "root_size_mib": $ROOT_SIZE,
+  "encrypted": $ENCRYPT,
+  "unlock": "$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo none)",
+  "compress": "$COMPRESS",
+  "created": "$(date -u +%FT%TZ)"
+}
+EOF
+
 log "Done: $OUT"
 [ "$ENCRYPT" = true ] && log "Encryption: LUKS2, unlock=$UNLOCK (passphrase is also enrolled for recovery)"
-ls -lh "$OUT"
+ls -lh "$OUT" "${OUT}.sha256" "${OUT}.json"

@@ -3,7 +3,10 @@
 #   1. serve /output over HTTP
 #   2. boot the imager in QEMU; it fetches the image and writes it to a blank disk
 #   3. boot the freshly imaged disk and confirm it reaches a login prompt
+#
+# IMAGE_FILE selects the image in /output (default: debian-trixie-ab.img).
 set -u
+IMAGE_FILE="${IMAGE_FILE:-debian-trixie-ab.img}"
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq qemu-system-x86 python3 >/dev/null 2>&1
 
@@ -19,7 +22,7 @@ echo "=== STAGE 1: netboot imager images the blank disk ==="
 timeout 900 qemu-system-x86_64 -m 1536 -smp 2 \
   -kernel /output/imager/vmlinuz \
   -initrd /output/imager/initramfs.img \
-  -append "imager.url=http://10.0.2.2:8000/debian-trixie-ab.img imager.compress=none imager.action=poweroff console=ttyS0,115200" \
+  -append "imager.url=http://10.0.2.2:8000/${IMAGE_FILE} imager.compress=none imager.action=poweroff console=ttyS0,115200" \
   -drive file=/output/target.img,format=raw,if=virtio \
   -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
   -nographic -serial mon:stdio -no-reboot 2>&1 | tee /output/imager-e2e.log | grep -aiE "imager|network|target|writing|success|reboot|error|fatal"

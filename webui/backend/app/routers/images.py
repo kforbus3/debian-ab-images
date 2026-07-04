@@ -16,6 +16,11 @@ async def list_images(_: str = Depends(require_auth)):
     return {"images": items, "imager_ready": imager_ready}
 
 
+@router.get("/disk")
+async def disk(_: str = Depends(require_auth)):
+    return orch.disk_usage()
+
+
 @router.delete("/{name}")
 async def delete_image(name: str, _: str = Depends(require_auth)):
     try:

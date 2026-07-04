@@ -7,14 +7,21 @@ through the Docker socket.
 
 ## Features
 
-- **Build wizard** — pick suite, hostname, user, sizes, compression, and extra
-  packages, then start a build and watch its **log stream live** in the browser.
+- **Build wizard** — pick distribution (Debian or Ubuntu), release, hostname,
+  user, sizes, compression, and extra packages, then start a build and watch its
+  **log stream live** in the browser (with cancel).
 - **One-click imager build.**
-- **Image library** — list, download, and delete built images.
+- **Image library** — list, download, and delete built images, with distro/
+  release/encryption metadata and SHA256 for each, and a **Deploy** button that
+  points the provisioning server at an image.
+- **Job history** — past builds and their full logs survive UI restarts
+  (persisted under `output/jobs/`).
 - **Provisioning control** — edit the server config (proxyDHCP/DHCP, server IP,
   image to deploy, post-image action), start/stop the PXE server.
-- **Live imaging monitor** — see machines that are PXE-booting / being imaged,
-  parsed from the dnsmasq logs, refreshed automatically.
+- **Live imaging monitor** — machines that are PXE-booting / being imaged,
+  merged from the dnsmasq **and** nginx logs, so a machine shows **imaged** once
+  it has fully downloaded the image.
+- **Disk usage** at a glance on the dashboard.
 
 ## Running it
 

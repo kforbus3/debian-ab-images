@@ -1,23 +1,27 @@
 # Image Builder
 
-Builds a bootable Debian A/B disk image in a privileged Docker container.
+Builds a bootable Debian or Ubuntu A/B disk image in a privileged Docker container.
 
 ## Usage
 
 ```bash
 make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123' IMAGE_SIZE=8
+# Ubuntu: make image SUITE=noble ...
 # or directly:
 ./builder/run.sh --hostname node --username admin --password 'ChangeMe123' \
     --image-size 8 --root-size 3072 --compress zstd
+./builder/run.sh --suite noble --hostname node --username admin --password 'ChangeMe123'
 ```
 
-Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`).
+Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.img.zst`).
 
 ## Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--suite` | `trixie` | Debian suite (e.g. `bookworm`, `trixie`) |
+| `--distro` | auto | `debian` \| `ubuntu`; auto-detected from `--suite` |
+| `--suite` | `trixie` | Release: `trixie`, `bookworm` (Debian); `noble`, `jammy` (Ubuntu) |
+| `--mirror` | distro default | APT mirror (`deb.debian.org` / `archive.ubuntu.com`) |
 | `--arch` | `amd64` | Target architecture |
 | `--hostname` | `debian-ab` | Image hostname |
 | `--username` | `debian` | Login user (added to `sudo`) |
@@ -33,18 +37,29 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`).
 | `--luks-passphrase P` | — | LUKS passphrase (setup + recovery); required with `--encrypt` |
 | `--tang-url URL` | — | Tang server URL (required for `--unlock tang`) |
 | `--compress` | `zstd` | `zstd` \| `gzip` \| `none` |
-| `--output PATH` | `/output/debian-<suite>-ab.img` | Output path (inside the container) |
+| `--output PATH` | `/output/<distro>-<suite>-ab.img` | Output path (inside the container) |
 
 The image auto-expands its overlay partition to fill the real disk on first boot,
 so build a compact image (e.g. 8 GiB) and deploy it to any larger disk.
 
 ## What's in the image
 
-- Minimal Debian (`minbase`) + kernel, GRUB, OpenSSH, sudo, RAUC, growpart.
+- Minimal Debian/Ubuntu (`minbase`) + kernel, GRUB, OpenSSH, sudo, RAUC, growpart.
 - A login user with sudo; **root is locked** (log in as the user, use sudo).
 - `systemd-networkd` configured for DHCP on all ethernet interfaces.
-- RAUC preconfigured (`/etc/rauc/system.conf`, `compatible=debian-ab`).
+- RAUC preconfigured (`/etc/rauc/system.conf`, `compatible=<distro>-ab`,
+  i.e. `debian-ab` or `ubuntu-ab` — update bundles must match).
 - `first-boot-expand.service` to grow the overlay on first boot.
+- `ab-mark-good.service` — resets the booted slot's GRUB try counter once the
+  system reaches multi-user, so the A/B fallback logic stays armed (see
+  [UPDATES.md](UPDATES.md)).
+- Each image ships with `<image>.sha256` (verified by the netboot imager) and a
+  `<image>.json` metadata sidecar (distro, release, sizes, encryption) consumed
+  by the web UI.
+
+Ubuntu images use the `linux-image-generic` kernel, which pulls in
+`linux-firmware` — expect a noticeably larger rootfs than Debian; the default
+3072 MiB root slots still fit it comfortably.
 
 ## Customization
 
@@ -52,7 +67,8 @@ so build a compact image (e.g. 8 GiB) and deploy it to any larger disk.
 - **Bake in files/config:** add them under `builder/overlay/` — its `etc/` and
   `usr/` trees are copied into the image. (Static files only; per-build values
   like hostname/user are handled by the script.)
-- **Different base:** `--suite bookworm`.
+- **Different base:** `--suite bookworm`, `--suite noble` (Ubuntu 24.04),
+  `--suite jammy` (Ubuntu 22.04).
 - **SSH-key-only login:** pass `--ssh-pubkey` and set a strong throwaway password.
 
 ## How it runs

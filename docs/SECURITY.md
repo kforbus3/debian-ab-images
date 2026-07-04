@@ -28,6 +28,19 @@ requests) and restrict it to one interface with `INTERFACE=`.
 - PXE/TFTP and the image are served over plain HTTP on the local segment — fine
   for a trusted provisioning LAN. Do not expose the provisioning server to
   untrusted networks.
+- The builder publishes a `<image>.sha256` next to each image and the imager
+  verifies the download against it before rebooting, so a truncated or corrupted
+  transfer fails loudly instead of producing a broken machine. (This is an
+  integrity check against accidents, not an authenticity check — HTTP is
+  unauthenticated; control the network.)
+- The web UI passes build secrets (login password, LUKS passphrase) to the
+  builder via the process environment, not command-line arguments, so they don't
+  appear in `ps` or persisted job records. They remain visible to anyone with
+  Docker access (`docker inspect` on a running build) — which is root-equivalent
+  anyway.
+- Web UI sessions are JWTs; live log streams use short-lived (60 s) per-job
+  tokens in the query string instead of the session token. Failed logins are
+  rate-limited.
 - For UEFI Secure Boot targets you must sign the iPXE binary / use a signed
   shim chain; by default, disable Secure Boot on the targets during imaging.
 

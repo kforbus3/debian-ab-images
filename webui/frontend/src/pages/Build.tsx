@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { Hammer, Cpu } from "lucide-react";
-import { api, apiError, tokens } from "../lib/api";
+import { Hammer, Cpu, XCircle } from "lucide-react";
+import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge } from "../components/ui";
+
+const SUITES: Record<string, { value: string; label: string }[]> = {
+  debian: [
+    { value: "trixie", label: "trixie (13)" },
+    { value: "bookworm", label: "bookworm (12)" },
+  ],
+  ubuntu: [
+    { value: "noble", label: "noble (24.04 LTS)" },
+    { value: "jammy", label: "jammy (22.04 LTS)" },
+  ],
+};
 
 export default function Build() {
   const toast = useToast();
   const [opts, setOpts] = useState({
-    suite: "trixie", hostname: "debian-ab", username: "admin", password: "",
+    distro: "debian", suite: "trixie", hostname: "debian-ab", username: "admin", password: "",
     image_size: 8, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
@@ -15,13 +26,16 @@ export default function Build() {
   const [log, setLog] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string>("");
+  const [jobId, setJobId] = useState<string>("");
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => () => esRef.current?.close(), []);
 
-  function stream(jobId: string) {
-    setLog([]); setRunning(true); setStatus("running");
-    const es = new EventSource(`/api/jobs/${jobId}/stream?token=${tokens.value}`);
+  async function stream(id: string) {
+    setLog([]); setRunning(true); setStatus("running"); setJobId(id);
+    // Streams are authorized by a short-lived per-job token, not the session JWT.
+    const { data } = await api.get(`/jobs/${id}/stream-token`);
+    const es = new EventSource(`/api/jobs/${id}/stream?token=${data.token}`);
     esRef.current = es;
     es.onmessage = (e) => setLog((l) => [...l, e.data]);
     es.addEventListener("end", (e: any) => {
@@ -32,24 +46,35 @@ export default function Build() {
   }
 
   async function startImage() {
-    try { const { data } = await api.post("/builds", opts); stream(data.id); }
+    try { const { data } = await api.post("/builds", opts); await stream(data.id); }
     catch (e) { toast.error(apiError(e)); }
   }
   async function startImager() {
-    try { const { data } = await api.post("/imager/build"); stream(data.id); }
+    try { const { data } = await api.post("/imager/build"); await stream(data.id); }
+    catch (e) { toast.error(apiError(e)); }
+  }
+  async function cancel() {
+    try { await api.post(`/jobs/${jobId}/cancel`); toast.success("Cancel requested"); }
     catch (e) { toast.error(apiError(e)); }
   }
   const set = (k: string, v: any) => setOpts((o) => ({ ...o, [k]: v }));
+  const neededMiB = 2 * (+opts.root_size || 0) + 512 + 2 + 256;
+  const sizeTooSmall = (+opts.image_size || 0) * 1024 < neededMiB;
+  const setDistro = (d: string) => setOpts((o) => ({
+    ...o, distro: d, suite: SUITES[d][0].value,
+    hostname: o.hostname === `${o.distro}-ab` ? `${d}-ab` : o.hostname,
+  }));
 
   return (
     <div>
-      <PageHeader title="Build Image" subtitle="Produce a bootable Debian A/B image" actions={
+      <PageHeader title="Build Image" subtitle="Produce a bootable Debian or Ubuntu A/B image" actions={
         <Button variant="secondary" onClick={startImager} disabled={running}><Cpu size={15} /> Build netboot imager</Button>
       } />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">
           <div className="grid grid-cols-2 gap-3">
-            <div><Label>Debian suite</Label><Select value={opts.suite} onChange={(e) => set("suite", e.target.value)}><option value="trixie">trixie (13)</option><option value="bookworm">bookworm (12)</option></Select></div>
+            <div><Label>Distribution</Label><Select value={opts.distro} onChange={(e) => setDistro(e.target.value)}><option value="debian">Debian</option><option value="ubuntu">Ubuntu</option></Select></div>
+            <div><Label>Release</Label><Select value={opts.suite} onChange={(e) => set("suite", e.target.value)}>{SUITES[opts.distro].map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}</Select></div>
             <div><Label>Compression</Label><Select value={opts.compress} onChange={(e) => set("compress", e.target.value)}><option value="zstd">zstd</option><option value="gzip">gzip</option><option value="none">none</option></Select></div>
             <div><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
             <div><Label>Username</Label><Input value={opts.username} onChange={(e) => set("username", e.target.value)} /></div>
@@ -90,15 +115,21 @@ export default function Build() {
           </div>
 
           <Button className="mt-4 w-full" loading={running} onClick={startImage}
-            disabled={!opts.password || (opts.encrypt && !opts.luks_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
+            disabled={!opts.password || sizeTooSmall || (opts.encrypt && !opts.luks_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
             <Hammer size={15} /> {running ? "Building…" : "Start build"}
           </Button>
           {!opts.password && <p className="mt-2 text-xs text-amber-400">Set a login password to enable the build.</p>}
+          {sizeTooSmall && <p className="mt-2 text-xs text-amber-400">
+            Image too small: two {opts.root_size} MiB root slots + boot + overlay need ≈{Math.ceil(neededMiB / 1024)} GiB.
+          </p>}
         </Card>
         <Card className="p-5">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold">Build log</h2>
-            {status && <Badge color={status === "success" ? "green" : status === "running" ? "amber" : "red"}>{status}</Badge>}
+            <div className="flex items-center gap-2">
+              {running && <Button variant="danger" size="sm" onClick={cancel}><XCircle size={13} /> Cancel</Button>}
+              {status && <Badge color={status === "success" ? "green" : status === "running" ? "amber" : "red"}>{status}</Badge>}
+            </div>
           </div>
           <LogView lines={log} />
         </Card>

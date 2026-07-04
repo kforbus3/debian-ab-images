@@ -12,8 +12,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-      - SECRET_KEY=${SECRET_KEY:-please-change-me}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in webui/.env}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in webui/.env (long random string)}
       - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:?Set HOST_PROJECT_DIR to this repo's absolute host path}
       - PROJECT_DIR=/project
     volumes:

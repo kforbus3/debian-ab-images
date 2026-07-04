@@ -87,7 +87,7 @@ export default function Provisioning() {
               <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500"><th className="px-3 py-2">MAC</th><th className="px-3 py-2">IP</th><th className="px-3 py-2">Status</th></tr></thead>
               <tbody className="divide-y divide-zinc-800/70">
                 {clients.map((c) => (
-                  <tr key={c.mac}><td className="px-3 py-2 font-mono text-xs text-zinc-300">{c.mac}</td><td className="px-3 py-2 text-zinc-400">{c.ip || "—"}</td><td className="px-3 py-2"><Badge color="blue">{c.event || "seen"}</Badge></td></tr>
+                  <tr key={c.mac + c.ip}><td className="px-3 py-2 font-mono text-xs text-zinc-300">{c.mac}</td><td className="px-3 py-2 text-zinc-400">{c.ip || "—"}</td><td className="px-3 py-2"><Badge color={c.event === "imaged" ? "green" : "blue"}>{c.event || "seen"}</Badge></td></tr>
                 ))}
               </tbody>
             </table>

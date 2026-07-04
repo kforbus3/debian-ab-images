@@ -13,8 +13,10 @@ boot.
 - `A_TRY` / `B_TRY` — per-slot boot attempt counters
 
 GRUB boots the first slot in `ORDER` whose `TRY` is `0`, setting it to `1` first.
-A successful boot resets the counter; a failure lets GRUB fall through to the
-other slot — the basis for safe rollback. RAUC manages these via `grub-editenv`.
+On a successful boot, `ab-mark-good.service` (a oneshot that runs at
+multi-user) resets the booted slot's counter via `grub-editenv`; a boot that
+never gets that far leaves the counter at `1`, so the next boot falls through
+to the other slot — the basis for safe rollback.
 
 ## Inspecting state
 
