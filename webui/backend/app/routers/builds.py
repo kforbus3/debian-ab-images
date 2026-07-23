@@ -10,19 +10,22 @@ router = APIRouter(tags=["builds"])
 # The 1 MiB BIOS-GRUB partition plus alignment padding, and a floor so the
 # overlay partition isn't degenerate.
 _BOOT_MIB = 512
+_ESP_MIB = 128
 _MIN_OVERLAY_MIB = 256
 
 
 def _validate_build(opts: dict) -> None:
+    size = opts.get("image_size", "auto")
     try:
-        image_mib = int(opts.get("image_size", 8)) * 1024
+        # 0 / "auto" = smallest possible; the image expands on first boot.
+        image_mib = 0 if size in ("auto", 0, "0", "", None) else int(size) * 1024
         root_mib = int(opts.get("root_size", 3072))
     except (TypeError, ValueError):
-        raise HTTPException(400, "image_size and root_size must be numbers")
+        raise HTTPException(400, "image_size and root_size must be numbers (or image_size 'auto')")
     if root_mib < 1024:
         raise HTTPException(400, "root_size must be at least 1024 MiB")
-    need = 2 * root_mib + _BOOT_MIB + 2 + _MIN_OVERLAY_MIB
-    if image_mib < need:
+    need = 2 * root_mib + _BOOT_MIB + _ESP_MIB + 2 + _MIN_OVERLAY_MIB
+    if image_mib and image_mib < need:
         raise HTTPException(
             400,
             f"image_size too small: two {root_mib} MiB root slots + boot + overlay "

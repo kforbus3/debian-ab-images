@@ -35,8 +35,11 @@ if os.path.isdir(_assets):
 async def spa(full_path: str):
     if full_path.startswith("api/"):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
-    candidate = os.path.join(STATIC_DIR, full_path)
-    if full_path and os.path.isfile(candidate):
+    # Resolve and contain: os.path.join ignores the base for absolute paths,
+    # and encoded ../ sequences arrive decoded — both would escape STATIC_DIR.
+    root = os.path.realpath(STATIC_DIR)
+    candidate = os.path.realpath(os.path.join(root, full_path))
+    if full_path and candidate.startswith(root + os.sep) and os.path.isfile(candidate):
         return FileResponse(candidate)
     index = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(index):

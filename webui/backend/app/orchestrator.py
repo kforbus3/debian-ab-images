@@ -35,7 +35,8 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         "--suite", suite,
         "--hostname", opts.get("hostname", f"{distro}-ab"),
         "--username", opts.get("username", "debian"),
-        "--image-size", str(opts.get("image_size", 8)),
+        "--image-size", ("auto" if opts.get("image_size") in ("auto", 0, "0", "", None)
+                         else str(opts["image_size"])),
         "--root-size", str(opts.get("root_size", 3072)),
         "--compress", opts.get("compress", "zstd"),
     ]

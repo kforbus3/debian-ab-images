@@ -9,9 +9,11 @@ A privileged Docker container that produces a bootable Debian or Ubuntu A/B disk
 image with `debootstrap`.
 
 Flow (`build-image.sh`):
-1. Create a sparse image file and partition it (GPT) with a BIOS-GRUB partition,
-   a shared `BOOT` partition, two root slots (`rootfs-a`, `rootfs-b`), and an
-   `overlay` partition.
+1. Create a sparse image file (sized to its contents by default) and partition
+   it (GPT) with a BIOS-GRUB partition, an EFI system partition, a shared
+   `BOOT` partition, two root slots (`rootfs-a`, `rootfs-b`), and an `overlay`
+   partition. GRUB is installed for both BIOS (`i386-pc`) and UEFI
+   (`x86_64-efi`, removable path), so the image boots on either firmware.
 2. `debootstrap` a minimal Debian into slot A; install the kernel, GRUB, SSH,
    sudo, RAUC, and growpart; create the login user.
 3. Apply the overlay files (RAUC config, GRUB A/B `grub.cfg`, first-boot expand

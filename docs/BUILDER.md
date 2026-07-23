@@ -5,11 +5,11 @@ Builds a bootable Debian or Ubuntu A/B disk image in a privileged Docker contain
 ## Usage
 
 ```bash
-make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123' IMAGE_SIZE=8
+make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123'
 # Ubuntu: make image SUITE=noble ...
 # or directly:
 ./builder/run.sh --hostname node --username admin --password 'ChangeMe123' \
-    --image-size 8 --root-size 3072 --compress zstd
+    --root-size 3072 --compress zstd
 ./builder/run.sh --suite noble --hostname node --username admin --password 'ChangeMe123'
 ```
 
@@ -20,14 +20,14 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--distro` | auto | `debian` \| `ubuntu`; auto-detected from `--suite` |
-| `--suite` | `trixie` | Release: `trixie`, `bookworm` (Debian); `noble`, `jammy` (Ubuntu) |
+| `--suite` | `trixie` | Release: `trixie`, `bookworm` (Debian); `resolute`, `noble`, `jammy` (Ubuntu) |
 | `--mirror` | distro default | APT mirror (`deb.debian.org` / `archive.ubuntu.com`) |
 | `--arch` | `amd64` | Target architecture |
 | `--hostname` | `debian-ab` | Image hostname |
 | `--username` | `debian` | Login user (added to `sudo`) |
 | `--password` | `debian` | Password for that user |
 | `--root-size` | `3072` | MiB per root slot |
-| `--image-size` | `8` | Total image size in GiB |
+| `--image-size` | `auto` | Total image size in GiB; `auto` = smallest possible |
 | `--packages "a b"` | — | Extra packages to install |
 | `--ssh-pubkey FILE` | — | Install an authorized SSH key for the user (from a file) |
 | `--ssh-authorized-key K` | — | Same, passing the key inline |
@@ -39,8 +39,10 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--compress` | `zstd` | `zstd` \| `gzip` \| `none` |
 | `--output PATH` | `/output/<distro>-<suite>-ab.img` | Output path (inside the container) |
 
-The image auto-expands its overlay partition to fill the real disk on first boot,
-so build a compact image (e.g. 8 GiB) and deploy it to any larger disk.
+By default the image is built as small as the layout allows (two root slots +
+boot + a minimal overlay, ≈7 GiB raw with the defaults) and the overlay
+partition auto-expands to fill the real disk on first boot — one image deploys
+to any larger disk, and smaller images write faster during mass imaging.
 
 ## What's in the image
 
@@ -53,6 +55,10 @@ so build a compact image (e.g. 8 GiB) and deploy it to any larger disk.
 - `ab-mark-good.service` — resets the booted slot's GRUB try counter once the
   system reaches multi-user, so the A/B fallback logic stays armed (see
   [UPDATES.md](UPDATES.md)).
+- `machine-identity.service` — the image ships with a **blank `machine-id` and
+  no SSH host keys** (so imaged machines aren't identity clones of each other).
+  On first boot each machine generates its own and stores them in the persistent
+  overlay, so they survive A/B slot switches and updates.
 - Each image ships with `<image>.sha256` (verified by the netboot imager) and a
   `<image>.json` metadata sidecar (distro, release, sizes, encryption) consumed
   by the web UI.
@@ -63,12 +69,14 @@ Ubuntu images use the `linux-image-generic` kernel, which pulls in
 
 ## Customization
 
-- **More packages:** `--packages "qemu-guest-agent vim curl"`.
+- **More packages:** `make image PACKAGES="qemu-guest-agent vim curl"` (or
+  `--packages "qemu-guest-agent vim curl"` when calling the script directly).
+  Also exposed as the "Extra packages" field in the web UI's build form.
 - **Bake in files/config:** add them under `builder/overlay/` — its `etc/` and
   `usr/` trees are copied into the image. (Static files only; per-build values
   like hostname/user are handled by the script.)
-- **Different base:** `--suite bookworm`, `--suite noble` (Ubuntu 24.04),
-  `--suite jammy` (Ubuntu 22.04).
+- **Different base:** `--suite bookworm`, `--suite resolute` (Ubuntu 26.04),
+  `--suite noble` (Ubuntu 24.04), `--suite jammy` (Ubuntu 22.04).
 - **SSH-key-only login:** pass `--ssh-pubkey` and set a strong throwaway password.
 
 ## How it runs
@@ -112,19 +120,26 @@ remains on disk. If enrollment fails (e.g. no TPM, Tang unreachable) it keeps th
 keyfile and retries next boot, so a machine never bricks.
 
 ```bash
-# TPM2 (recommended where available)
-make image ... ENCRYPT=1   # or: ./builder/run.sh --encrypt --unlock tpm2 --luks-passphrase 'recover-me'
+# TPM2 (recommended where available; UNLOCK defaults to tpm2)
+make image ENCRYPT=1 LUKS_PASSPHRASE='recover-me'
+# or: ./builder/run.sh --encrypt --unlock tpm2 --luks-passphrase 'recover-me'
 
 # Tang / NBDE
-./builder/run.sh --encrypt --unlock tang --tang-url http://tang.lan:7500 --luks-passphrase 'recover-me'
+make image ENCRYPT=1 UNLOCK=tang TANG_URL=http://tang.lan:7500 LUKS_PASSPHRASE='recover-me'
+# or: ./builder/run.sh --encrypt --unlock tang --tang-url http://tang.lan:7500 --luks-passphrase 'recover-me'
 ```
 
 > The overlay auto-expand on first boot resizes the LUKS container too.
 
 ## Notes & limitations
 
-- BIOS/GRUB boot (covers most servers and VMs). UEFI-only targets need an ESP +
-  `grub-efi`; not included by default.
+- **Boots on both BIOS and UEFI.** GRUB is installed twice: `i386-pc` into the
+  bios_grub partition, and `x86_64-efi` onto the ESP at the removable path
+  (`\EFI\BOOT\BOOTX64.EFI`, no NVRAM entry needed — right for mass imaging).
+  Both share the same `grub.cfg` and `grubenv` on the BOOT partition, so A/B
+  slot logic behaves identically under either firmware.
+- **Secure Boot is not supported** (GRUB is unsigned) — disable it on UEFI
+  targets, or sign the bootloader yourself.
 - `/boot` and the kernel are shared across A/B; A/B applies to the root
   filesystem. A bad kernel affects both slots — test kernel changes before
   rolling out. See [UPDATES.md](UPDATES.md).

@@ -10,6 +10,7 @@ const SUITES: Record<string, { value: string; label: string }[]> = {
     { value: "bookworm", label: "bookworm (12)" },
   ],
   ubuntu: [
+    { value: "resolute", label: "resolute (26.04 LTS)" },
     { value: "noble", label: "noble (24.04 LTS)" },
     { value: "jammy", label: "jammy (22.04 LTS)" },
   ],
@@ -19,7 +20,7 @@ export default function Build() {
   const toast = useToast();
   const [opts, setOpts] = useState({
     distro: "debian", suite: "trixie", hostname: "debian-ab", username: "admin", password: "",
-    image_size: 8, root_size: 3072, compress: "zstd", packages: "",
+    image_size: 0, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
   });
@@ -58,8 +59,9 @@ export default function Build() {
     catch (e) { toast.error(apiError(e)); }
   }
   const set = (k: string, v: any) => setOpts((o) => ({ ...o, [k]: v }));
-  const neededMiB = 2 * (+opts.root_size || 0) + 512 + 2 + 256;
-  const sizeTooSmall = (+opts.image_size || 0) * 1024 < neededMiB;
+  const neededMiB = 2 * (+opts.root_size || 0) + 512 + 128 + 2 + 256;
+  // 0 = auto: the builder picks the smallest size (it expands on first boot).
+  const sizeTooSmall = +opts.image_size > 0 && +opts.image_size * 1024 < neededMiB;
   const setDistro = (d: string) => setOpts((o) => ({
     ...o, distro: d, suite: SUITES[d][0].value,
     hostname: o.hostname === `${o.distro}-ab` ? `${d}-ab` : o.hostname,
@@ -79,7 +81,7 @@ export default function Build() {
             <div><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
             <div><Label>Username</Label><Input value={opts.username} onChange={(e) => set("username", e.target.value)} /></div>
             <div><Label>Password</Label><Input type="password" value={opts.password} onChange={(e) => set("password", e.target.value)} placeholder="login password" /></div>
-            <div><Label>Image size (GiB)</Label><Input type="number" value={opts.image_size} onChange={(e) => set("image_size", +e.target.value)} /></div>
+            <div><Label>Image size (GiB, 0 = smallest)</Label><Input type="number" min={0} value={opts.image_size} onChange={(e) => set("image_size", +e.target.value)} /></div>
             <div><Label>Root slot size (MiB)</Label><Input type="number" value={opts.root_size} onChange={(e) => set("root_size", +e.target.value)} /></div>
             <div className="col-span-2"><Label>Extra packages (space-separated)</Label><Input value={opts.packages} onChange={(e) => set("packages", e.target.value)} placeholder="vim curl qemu-guest-agent" /></div>
             <div className="col-span-2"><Label>SSH public key (optional)</Label><Input value={opts.ssh_key} onChange={(e) => set("ssh_key", e.target.value)} placeholder="ssh-ed25519 AAAA… user@host" /></div>

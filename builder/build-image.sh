@@ -2,12 +2,13 @@
 #
 # Build a bootable Debian or Ubuntu A/B disk image (optionally LUKS-encrypted).
 #
-# Layout (GPT, BIOS/GRUB):
-#   p1  bios_grub  (1 MiB, raw)        GRUB core
-#   p2  BOOT       (ext4, label BOOT)  shared /boot + kernel + grubenv (always plaintext)
-#   p3  rootfs-a   root slot A         (ext4, or LUKS2 + ext4 when --encrypt)
-#   p4  rootfs-b   root slot B         (copy of A)
-#   p5  overlay    persistent data     (grows on first boot)
+# Layout (GPT, hybrid BIOS + UEFI boot):
+#   p1  bios_grub  (1 MiB, raw)        GRUB BIOS core
+#   p2  ESP        (vfat, label EFI)   EFI system partition (GRUB at removable path)
+#   p3  BOOT       (ext4, label BOOT)  shared /boot + kernel + grubenv (always plaintext)
+#   p4  rootfs-a   root slot A         (ext4, or LUKS2 + ext4 when --encrypt)
+#   p5  rootfs-b   root slot B         (copy of A)
+#   p6  overlay    persistent data     (grows to fill the disk on first boot)
 #
 # Runs inside the privileged builder container (see Dockerfile).
 set -euo pipefail
@@ -22,7 +23,9 @@ USERNAME="${USERNAME:-debian}"
 PASSWORD="${PASSWORD:-debian}"
 ROOT_SIZE="${ROOT_SIZE:-3072}"
 BOOT_SIZE="${BOOT_SIZE:-512}"
-IMAGE_SIZE="${IMAGE_SIZE:-8}"
+ESP_SIZE="${ESP_SIZE:-128}"
+OVERLAY_MIN="${OVERLAY_MIN:-256}"       # overlay grows to fill the disk on first boot
+IMAGE_SIZE="${IMAGE_SIZE:-auto}"        # GiB, or "auto" = smallest possible
 OUTPUT="${OUTPUT:-}"                    # empty = /output/<distro>-<suite>-ab.img
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
 SSH_PUBKEY="${SSH_PUBKEY:-}"
@@ -45,7 +48,9 @@ Usage: $0 [options]
   --username NAME         Login user to create (default: $USERNAME)
   --password PASS         Password for that user (default: $USERNAME)
   --root-size MiB         Size of each root slot (default: $ROOT_SIZE)
-  --image-size GiB        Total image size (default: $IMAGE_SIZE)
+  --image-size GiB|auto   Total image size (default: auto = smallest possible;
+                          the overlay partition expands to fill the target disk
+                          on first boot either way)
   --output PATH           Output image path
   --packages "a b c"      Extra packages to install
   --ssh-pubkey FILE       Authorized SSH key file for the user
@@ -93,7 +98,7 @@ die()  { echo -e "\033[0;31m[build] ERROR:\033[0m $*" >&2; exit 1; }
 # --- Resolve distro (auto-detect from suite when not given) ---
 if [ -z "$DISTRO" ]; then
     case "$SUITE" in
-        bionic|focal|jammy|noble|oracular|plucky|questing) DISTRO=ubuntu;;
+        bionic|focal|jammy|noble|oracular|plucky|questing|resolute) DISTRO=ubuntu;;
         *) DISTRO=debian;;
     esac
 fi
@@ -155,7 +160,7 @@ MAPPERS=()
 cleanup() {
     set +e
     mountpoint -q "$MNT/dev/pts" && umount "$MNT/dev/pts"
-    for m in dev proc sys boot var/lib/overlay; do
+    for m in dev proc sys boot/efi boot var/lib/overlay; do
         mountpoint -q "$MNT/$m" && umount "$MNT/$m"
     done
     mountpoint -q "$WORK/b" && umount "$WORK/b"
@@ -169,34 +174,47 @@ cleanup() {
 trap cleanup EXIT
 
 log "Building image  distro=$DISTRO suite=$SUITE  encrypt=$ENCRYPT  unlock=$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo n/a)  ssh-key-only=$SSH_KEY_ONLY"
-rm -f "$RAW"
-truncate -s "${IMAGE_SIZE}G" "$RAW"
 
-log "Partitioning (GPT, BIOS/GRUB, A/B)"
-B_START=2
-B_END=$((B_START + BOOT_SIZE))
+E_START=2
+E_END=$((E_START + ESP_SIZE))
+B_END=$((E_END + BOOT_SIZE))
 A_END=$((B_END + ROOT_SIZE))
 BB_END=$((A_END + ROOT_SIZE))
+MIN_MIB=$((BB_END + OVERLAY_MIN + 1))   # +1 MiB tail for the backup GPT
+if [ "$IMAGE_SIZE" = auto ]; then
+    TOTAL_MIB=$MIN_MIB
+    log "Auto image size: ${TOTAL_MIB} MiB (overlay expands to fill the target disk on first boot)"
+else
+    TOTAL_MIB=$((IMAGE_SIZE * 1024))
+    [ "$TOTAL_MIB" -ge "$MIN_MIB" ] || \
+        die "--image-size ${IMAGE_SIZE}G too small: layout needs ${MIN_MIB} MiB (reduce --root-size, or use --image-size auto)"
+fi
+rm -f "$RAW"
+truncate -s "${TOTAL_MIB}M" "$RAW"
+
+log "Partitioning (GPT, hybrid BIOS+UEFI, A/B)"
 parted -s "$RAW" mklabel gpt
-parted -s "$RAW" mkpart bios     1MiB        ${B_START}MiB
+parted -s "$RAW" mkpart bios     1MiB ${E_START}MiB
 parted -s "$RAW" set 1 bios_grub on
-parted -s "$RAW" mkpart BOOT     ext4 ${B_START}MiB ${B_END}MiB
-parted -s "$RAW" mkpart rootfs-a ext4 ${B_END}MiB   ${A_END}MiB
-parted -s "$RAW" mkpart rootfs-b ext4 ${A_END}MiB   ${BB_END}MiB
-parted -s "$RAW" mkpart overlay  ext4 ${BB_END}MiB  100%
+parted -s "$RAW" mkpart ESP      fat32 ${E_START}MiB ${E_END}MiB
+parted -s "$RAW" set 2 esp on
+parted -s "$RAW" mkpart BOOT     ext4 ${E_END}MiB    ${B_END}MiB
+parted -s "$RAW" mkpart rootfs-a ext4 ${B_END}MiB    ${A_END}MiB
+parted -s "$RAW" mkpart rootfs-b ext4 ${A_END}MiB    ${BB_END}MiB
+parted -s "$RAW" mkpart overlay  ext4 ${BB_END}MiB   100%
 
 LOOP="$(losetup -f --show -P "$RAW")"
 log "Loop device: $LOOP"
 partprobe "$LOOP" 2>/dev/null || true
 LOOP_BASE="$(basename "$LOOP")"
-for n in 1 2 3 4 5; do
+for n in 1 2 3 4 5 6; do
     node="${LOOP}p${n}"
     [ -b "$node" ] && continue
     sysdev="/sys/class/block/${LOOP_BASE}p${n}/dev"
     for _ in 1 2 3 4 5; do [ -f "$sysdev" ] && break; sleep 0.3; done
     [ -f "$sysdev" ] && { mm="$(cat "$sysdev")"; mknod "$node" b "${mm%:*}" "${mm#*:}"; }
 done
-P_BOOT="${LOOP}p2"; P_A="${LOOP}p3"; P_B="${LOOP}p4"; P_OVL="${LOOP}p5"
+P_ESP="${LOOP}p2"; P_BOOT="${LOOP}p3"; P_A="${LOOP}p4"; P_B="${LOOP}p5"; P_OVL="${LOOP}p6"
 [ -b "$P_BOOT" ] || { echo "partition nodes missing under $LOOP" >&2; ls -l ${LOOP}* >&2; exit 1; }
 
 # --- Set up encryption (or plain) backing devices ---
@@ -228,6 +246,7 @@ if [ "$ENCRYPT" = true ]; then
 fi
 
 log "Formatting filesystems"
+mkfs.vfat -F32 -n EFI    "$P_ESP" >/dev/null
 mkfs.ext4 -q -L BOOT     "$P_BOOT"
 mkfs.ext4 -q -L rootfs-a "$DEV_A"
 mkfs.ext4 -q -L rootfs-b "$DEV_B"
@@ -238,6 +257,8 @@ mkdir -p "$MNT"
 mount "$DEV_A" "$MNT"
 mkdir -p "$BOOTMNT" "$MNT/var/lib/overlay"
 mount "$P_BOOT" "$BOOTMNT"
+mkdir -p "$BOOTMNT/efi"
+mount "$P_ESP" "$BOOTMNT/efi"
 mount "$DEV_OVL" "$MNT/var/lib/overlay"
 
 log "Bootstrapping $OS_PRETTY $SUITE ($ARCH)"
@@ -264,6 +285,7 @@ EOF
 cat > "$MNT/etc/fstab" <<EOF
 # <file system>            <mount point>      <type> <options>      <dump> <pass>
 LABEL=BOOT                 /boot              ext4   defaults       0      2
+LABEL=EFI                  /boot/efi          vfat   umask=0077     0      1
 LABEL=overlay              /var/lib/overlay   ext4   defaults,nofail 0     2
 tmpfs                      /tmp               tmpfs  defaults       0      0
 EOF
@@ -334,7 +356,7 @@ apt-get update
 # initramfs-tools is explicit: Debian kernels depend on it, Ubuntu kernels only
 # recommend it, and without it no initrd.img is generated for GRUB to load.
 apt-get install -y --no-install-recommends \
-    ${KERNEL_PKG} initramfs-tools grub-pc grub-pc-bin \
+    ${KERNEL_PKG} initramfs-tools grub-pc grub-pc-bin grub-efi-amd64-bin \
     openssh-server sudo ca-certificates \
     ${RESOLVED_PKG} cloud-guest-utils gdisk parted e2fsprogs \
     rauc ${CRYPT_PACKAGES} ${EXTRA_PACKAGES}
@@ -346,6 +368,16 @@ passwd -l root
 CHROOT
 chroot "$MNT" bash /tmp/setup.sh
 rm -f "$MNT/tmp/setup.sh"
+
+# Every machine imaged from this build must get its own identity. Blank the
+# machine-id and drop the build-time SSH host keys; machine-identity.service
+# regenerates them on first boot and persists them in the overlay so they
+# survive A/B slot switches and updates.
+log "Resetting machine identity (machine-id, SSH host keys)"
+truncate -s0 "$MNT/etc/machine-id"
+install -d "$MNT/var/lib/dbus"
+ln -sf /etc/machine-id "$MNT/var/lib/dbus/machine-id"
+rm -f "$MNT"/etc/ssh/ssh_host_*
 
 # --- SSH key + key-only hardening ---
 if [ -n "$SSH_PUBKEY" ]; then
@@ -372,8 +404,8 @@ cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
-         "$MNT/usr/local/sbin/ab-mark-good.sh"
-chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service
+         "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh"
+chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service machine-identity.service
 
 [ -f "$MNT/etc/rauc/keyring.pem" ] || cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null || touch "$MNT/etc/rauc/keyring.pem"
 
@@ -403,8 +435,13 @@ if [ "$ENCRYPT" = true ]; then
     chroot "$MNT" update-initramfs -u
 fi
 
-log "Installing GRUB to $LOOP and writing A/B config"
+log "Installing GRUB (BIOS + UEFI) and writing A/B config"
 chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
+# --removable puts GRUB at the fallback path (\EFI\BOOT\BOOTX64.EFI) so any
+# UEFI firmware boots it without an NVRAM entry — required for mass imaging,
+# where NVRAM can't be prepared per machine. Secure Boot must be disabled.
+chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --boot-directory=/boot --removable --no-nvram
 KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | head -n1)"
 [ -n "$KVER" ] || die "no kernel found on BOOT partition"
 log "Kernel version: $KVER"
@@ -416,6 +453,7 @@ chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" A_TRY=0 B_TRY=0
 log "Syncing root slot A -> slot B"
 umount "$MNT/dev/pts" "$MNT/dev" "$MNT/proc" "$MNT/sys"
 umount "$MNT/var/lib/overlay"
+umount "$BOOTMNT/efi"
 umount "$BOOTMNT"
 mkdir -p "$WORK/b"
 mount "$DEV_B" "$WORK/b"
@@ -447,7 +485,8 @@ cat > "${OUT}.json" <<EOF
   "arch": "$ARCH",
   "hostname": "$HOSTNAME_",
   "username": "$USERNAME",
-  "image_size_gib": $IMAGE_SIZE,
+  "image_size_gib": $(awk "BEGIN{printf \"%.2f\", $TOTAL_MIB/1024}"),
+  "image_size_mib": $TOTAL_MIB,
   "root_size_mib": $ROOT_SIZE,
   "encrypted": $ENCRYPT,
   "unlock": "$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo none)",

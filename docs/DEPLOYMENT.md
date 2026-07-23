@@ -40,7 +40,9 @@ it on a Linux host attached to the imaging switch.
 1. Build the image and imager (`make image`, `make imager`).
 2. Start the server.
 3. On each target machine, enable **network/PXE boot** (BIOS: enable PXE; UEFI:
-   enable network boot, and disable Secure Boot unless you sign iPXE).
+   enable network boot and **disable Secure Boot** — both the iPXE netboot
+   binary and the installed image's GRUB are unsigned). The imaged system boots
+   on both BIOS and UEFI firmware, so mixed fleets are fine.
 4. Power them on. Each PXE-boots, runs the imager, writes the disk, and reboots
    into Debian A/B. Watch `docker compose logs -f`.
 
