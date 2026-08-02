@@ -17,7 +17,7 @@ STAMP=/var/lib/first-boot-expand.done
 # Bumped whenever this script changes behaviour, and logged on every run: an
 # image carries a copy of this file baked in at build time, so "did this machine
 # get the fix?" is otherwise only answerable by reading the file on the machine.
-VERSION=2
+VERSION=3
 
 log() { echo "first-boot-expand[v$VERSION]: $*"; }
 
@@ -149,7 +149,23 @@ else
     log "  growpart reported no change (see above)"
 fi
 
-[ "$ENCRYPTED" = 1 ] && crypt_resize "$MAPNAME"
+# Only resize the mapping if it is actually short of its partition. When the
+# imager has already grown the partition, dm-crypt was created at full size and
+# there is nothing to do -- and since `cryptsetup resize` needs the volume key,
+# attempting it anyway logs an alarming "no usable key" on a run that is in fact
+# succeeding.
+if [ "$ENCRYPTED" = 1 ]; then
+    MAP_BYTES="$(blockdev --getsize64 "$OVERLAY_FS" 2>/dev/null || echo 0)"
+    PART_BYTES="$(blockdev --getsize64 "$CRYPT_PART" 2>/dev/null || echo 0)"
+    # A LUKS2 header is 16 MiB by default; anything within a slack of twice that
+    # counts as already spanning the partition.
+    if [ "$PART_BYTES" -gt 0 ] && \
+       [ "$((PART_BYTES - MAP_BYTES))" -gt "$((32 * 1024 * 1024))" ]; then
+        crypt_resize "$MAPNAME"
+    else
+        log "  dm-crypt mapping already spans the partition; no key needed"
+    fi
+fi
 resize2fs "$OVERLAY_FS" 2>&1 | sed 's/^/  /'
 
 AFTER="$(fs_size_bytes "${MOUNTPOINT:-$OVERLAY_FS}")"

@@ -166,6 +166,49 @@ if [ -x /usr/sbin/sgdisk ]; then
         || say "WARNING: could not relocate the GPT backup header"
 fi
 
+# Grow the overlay partition to fill the disk, here rather than on first boot.
+#
+# First boot is a bad place to do it. The overlay is encrypted, so growing it
+# there means `cryptsetup resize`, which needs the volume key -- and by then the
+# bootstrap keyfile may already have been consumed and deleted by LUKS
+# enrolment, leaving the partition stuck at its built size with no way to grow
+# it non-interactively. Here nothing is mounted and no volume is open, so
+# enlarging the partition needs no key at all: the dm-crypt mapping is simply
+# created at full size on first boot, and all that remains is a filesystem
+# resize, which never needed a key.
+#
+# Only the end of the partition moves. The start sector, type, name and unique
+# GUID are preserved, so no data is relocated and nothing else on the disk
+# changes.
+grow_overlay() {
+    [ -x /usr/sbin/sgdisk ] || { say "WARNING: sgdisk missing; cannot grow the overlay"; return 1; }
+
+    local num start typeguid uniqueguid
+    num="$(/usr/sbin/sgdisk -p "$TARGET" 2>/dev/null \
+        | $BB awk '$NF == "overlay" { print $1; exit }')"
+    [ -n "$num" ] || { say "WARNING: no partition named 'overlay'; leaving the disk as imaged"; return 1; }
+
+    start="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/First sector/ { print $3; exit }')"
+    typeguid="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/Partition GUID code/ { print $4; exit }')"
+    uniqueguid="$(/usr/sbin/sgdisk -i "$num" "$TARGET" 2>/dev/null \
+        | $BB awk '/Partition unique GUID/ { print $4; exit }')"
+    [ -n "$start" ] && [ -n "$typeguid" ] && [ -n "$uniqueguid" ] || {
+        say "WARNING: could not read partition $num; leaving the disk as imaged"; return 1; }
+
+    say "Growing overlay (partition ${num}) to fill ${TARGET}…"
+    if /usr/sbin/sgdisk -d "$num" \
+            -n "${num}:${start}:0" -t "${num}:${typeguid}" \
+            -u "${num}:${uniqueguid}" -c "${num}:overlay" "$TARGET" >/dev/null 2>&1; then
+        say "${GRN}Overlay now spans the free space.${NC}"
+        return 0
+    fi
+    say "WARNING: could not grow the overlay partition; first boot will retry"
+    return 1
+}
+grow_overlay || true
+
 # Re-read the partition table so the kernel sees the new layout.
 $BB blockdev --rereadpt "$TARGET" 2>/dev/null || true
 
