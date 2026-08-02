@@ -96,6 +96,13 @@ def _self_image() -> str:
 # one, so listing them only clutters the choice.
 _VIRTUAL_IF_RE = re.compile(r"^(docker\d+|br-[0-9a-f]{12}|veth|virbr\d+-nic|tun\d+|tap\d+)")
 
+# `ip -d link` reports linkinfo.info_kind for every synthetic device and omits it
+# for real NICs, which is a far better filter than guessing from names. A kernel
+# leaves a pile of always-present tunnel stubs lying around (gre0, sit0, tunl0,
+# erspan0, ip6tnl0, …) and none of them can carry a PXE client. These kinds are
+# the ones that legitimately can, alongside genuine hardware.
+_USABLE_IF_KINDS = {"vlan", "bond", "bridge", "macvlan", "team"}
+
 
 def list_interfaces() -> list[dict]:
     """The host's IPv4 interfaces, so the UI can offer them instead of asking
@@ -113,37 +120,91 @@ def list_interfaces() -> list[dict]:
         )
         return proc.stdout
     try:
-        links = json.loads(_run("ip", "-j", "-4", "addr") or "[]")
+        # `ip -4 addr` omits an interface entirely when it has no IPv4 address,
+        # so links are enumerated separately. The provisioning NIC is exactly
+        # the one likely to have no address — it faces an isolated segment where
+        # this server is supposed to BE the DHCP server — and leaving it out of
+        # the list made it impossible to choose.
+        links = json.loads(_run("ip", "-d", "-j", "link") or "[]")
+        addrs = json.loads(_run("ip", "-j", "-4", "addr") or "[]")
         routes = json.loads(_run("ip", "-j", "-4", "route") or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
         return []
     default_if = next((r.get("dev") for r in routes if r.get("dst") == "default"), None)
+
+    by_name: dict[str, dict] = {}
+    for entry in addrs:
+        for addr in entry.get("addr_info", []):
+            if addr.get("family") != "inet" or not addr.get("local"):
+                continue
+            # /31 and /32 can't host a subnet of PXE clients.
+            if addr.get("prefixlen", 32) >= 31:
+                continue
+            by_name.setdefault(entry.get("ifname", ""), addr)
 
     out: list[dict] = []
     for link in links:
         name = link.get("ifname")
         if not name or name == "lo" or _VIRTUAL_IF_RE.match(name):
             continue
-        for addr in link.get("addr_info", []):
-            if addr.get("family") != "inet" or not addr.get("local"):
-                continue
-            # /31 and /32 can't host a subnet of PXE clients.
-            if addr.get("prefixlen", 32) >= 31:
-                continue
+        if link.get("link_type") != "ether":
+            continue
+        kind = (link.get("linkinfo") or {}).get("info_kind")
+        if kind and kind not in _USABLE_IF_KINDS:
+            continue
+        addr = by_name.get(name)
+        item = {
+            "name": name,
+            "ip": "",
+            "prefixlen": 0,
+            "network": "",
+            "netmask": "",
+            "mac": link.get("address", ""),
+            "up": link.get("operstate") not in ("DOWN",),
+            "carrier": link.get("operstate") == "UP",
+            "default": name == default_if,
+        }
+        if addr:
             try:
                 net = ipaddress.ip_network(f"{addr['local']}/{addr['prefixlen']}", strict=False)
+                item.update(ip=addr["local"], prefixlen=addr["prefixlen"],
+                            network=str(net.network_address), netmask=str(net.netmask))
             except ValueError:
-                continue
-            out.append({
-                "name": name,
-                "ip": addr["local"],
-                "prefixlen": addr["prefixlen"],
-                "network": str(net.network_address),
-                "netmask": str(net.netmask),
-                "up": link.get("operstate") != "DOWN",
-                "default": name == default_if,
-            })
-    return out
+                pass
+        out.append(item)
+    # Addressless NICs first: on a turnkey setup that is the provisioning one.
+    return sorted(out, key=lambda i: (bool(i["ip"]), i["default"], i["name"]))
+
+
+# Candidate subnets for an unconfigured provisioning NIC, in preference order.
+# Deliberately uncommon so they are unlikely to collide with the LAN the server
+# is already on.
+_CANDIDATE_NETS = ["192.168.50.0/24", "10.42.0.0/24", "172.30.0.0/24", "192.168.150.0/24"]
+
+
+def suggest_provisioning_net(interfaces: list[dict] | None = None) -> dict:
+    """A static address for a NIC that has none, avoiding subnets already in use."""
+    interfaces = interfaces if interfaces is not None else list_interfaces()
+    taken = []
+    for i in interfaces:
+        if i.get("ip") and i.get("prefixlen"):
+            try:
+                taken.append(ipaddress.ip_network(f"{i['ip']}/{i['prefixlen']}", strict=False))
+            except ValueError:
+                pass
+    for cand in _CANDIDATE_NETS:
+        net = ipaddress.ip_network(cand)
+        if any(net.overlaps(t) for t in taken):
+            continue
+        return {
+            "SERVER_IP": str(net.network_address + 1),
+            "prefixlen": net.prefixlen,
+            "DHCP_NETMASK": str(net.netmask),
+            "PROXY_SUBNET": str(net.network_address),
+            "DHCP_RANGE_START": str(net.network_address + 100),
+            "DHCP_RANGE_END": str(net.network_address + 200),
+        }
+    return {}
 
 
 def suggest_dhcp_range(ip: str, prefixlen: int) -> dict:
@@ -335,7 +396,7 @@ def disk_usage() -> dict:
 ENV_PATH = os.path.join(settings.project_dir, "server", ".env")
 ENV_EXAMPLE = os.path.join(settings.project_dir, "server", ".env.example")
 ENV_KEYS = [
-    "SERVER_IP", "IMAGE_FILE", "ACTION", "MODE", "INTERFACE", "PROXY_SUBNET",
+    "SERVER_IP", "SERVER_PREFIXLEN", "IMAGE_FILE", "ACTION", "MODE", "INTERFACE", "PROXY_SUBNET",
     "DHCP_RANGE_START", "DHCP_RANGE_END", "DHCP_NETMASK", "DHCP_ROUTER", "DHCP_DNS", "LEASE_TIME",
 ]
 
