@@ -1,5 +1,8 @@
 server {
-    listen 80 default_server;
+    # Bound to the provisioning IP only. The container uses host networking, so
+    # a wildcard listener would expose the image library on every network the
+    # host is attached to; the imaging segment is the only one that needs it.
+    listen ${SERVER_IP}:80 default_server;
     server_name _;
     root /srv/http;
     autoindex on;

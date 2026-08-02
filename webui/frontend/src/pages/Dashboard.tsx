@@ -2,15 +2,17 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { HardDrive, Cpu, Network, Hammer, Database } from "lucide-react";
 import { api, fmtBytes } from "../lib/api";
-import { Card, PageHeader, Badge } from "../components/ui";
+import { Card, PageHeader, Badge, Alert } from "../components/ui";
 
 export default function Dashboard() {
   const [images, setImages] = useState<any[]>([]);
   const [imagerReady, setImagerReady] = useState(false);
   const [server, setServer] = useState<{ running: boolean } | null>(null);
   const [disk, setDisk] = useState<{ artifacts: number; free: number } | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
 
   useEffect(() => {
+    api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
     api.get("/images").then((r) => { setImages(r.data.images); setImagerReady(r.data.imager_ready); }).catch(() => {});
     api.get("/server/status").then((r) => setServer(r.data)).catch(() => setServer({ running: false }));
     api.get("/images/disk").then((r) => setDisk(r.data)).catch(() => {});
@@ -19,6 +21,7 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Build images and provision machines over the network" />
+      <Alert title="Setup needed before builds will run" items={problems} />
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Card className="p-5">
           <div className="flex items-center justify-between"><HardDrive className="text-brand-400" size={22} /><span className="text-3xl font-semibold">{images.length}</span></div>

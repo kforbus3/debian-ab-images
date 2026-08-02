@@ -9,10 +9,26 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import signal
 from dataclasses import dataclass, field
 from typing import Literal
 
 JobStatus = Literal["running", "success", "failed", "canceled"]
+
+# The builder scripts colourise their output for a terminal; in the browser's log
+# pane those escapes are just literal "[0;32m" noise, so drop them on the way in
+# — that keeps both the live stream and the persisted log clean.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+# Orchestrator command templates carry this token where the job id belongs; it
+# is substituted in start(), which is the first place the id is known.
+JOB_TOKEN = "%JOB%"
+
+
+def container_name(job_id: str) -> str:
+    """Name of the container a job runs its work in, so cancel can remove it."""
+    return f"dab-{job_id}"
 
 
 @dataclass
@@ -87,14 +103,19 @@ class JobManager:
         os.replace(tmp, self._index_path())
 
     def log_text(self, job: Job) -> str:
-        """Full log: in-memory for live jobs, from disk for restored ones."""
-        if job.lines or not self._state_dir:
-            return "\n".join(job.lines)
-        try:
-            with open(self._log_path(job.id)) as f:
-                return f.read().rstrip("\n")
-        except OSError:
-            return ""
+        """Full log, preferring the on-disk copy.
+
+        The in-memory buffer is capped (see _emit), so a long build's head is
+        gone from it — the file on disk is the complete record. Fall back to
+        memory only when there is no state dir or the file is unreadable.
+        """
+        if self._state_dir:
+            try:
+                with open(self._log_path(job.id)) as f:
+                    return f.read().rstrip("\n")
+            except OSError:
+                pass
+        return "\n".join(job.lines)
 
     # --------------------------- lifecycle ---------------------------
     def list(self) -> list[dict]:
@@ -113,8 +134,11 @@ class JobManager:
     async def start(self, *, type: str, label: str, cmd: list[str], now: str,
                     env: dict[str, str] | None = None) -> Job:
         self._counter += 1
-        job = Job(id=f"{type}-{self._counter}", type=type, label=label, cmd=cmd,
-                  started=now, env=env)
+        job_id = f"{type}-{self._counter}"
+        # The orchestrator names the container it launches after the job so that
+        # cancel can reach it; the id only exists here, hence the placeholder.
+        cmd = [c.replace(JOB_TOKEN, job_id) for c in cmd]
+        job = Job(id=job_id, type=type, label=label, cmd=cmd, started=now, env=env)
         self._jobs[job.id] = job
         self._save_index()
         asyncio.create_task(self._run(job))
@@ -129,6 +153,9 @@ class JobManager:
             proc = await asyncio.create_subprocess_exec(
                 *job.cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                 env={**os.environ, **(job.env or {})},
+                # Own process group, so cancel can signal the shell *and* the
+                # docker CLI it is waiting on, not just the shell.
+                start_new_session=True,
             )
         except Exception as exc:  # noqa: BLE001
             await self._emit(job, f"Failed to launch: {exc}")
@@ -151,11 +178,15 @@ class JobManager:
         await self._close(job)
 
     async def _emit(self, job: Job, line: str) -> None:
+        line = _ANSI_RE.sub("", line)
         job.lines.append(line)
         if len(job.lines) > 5000:
             job.lines = job.lines[-5000:]
         if job._logfh:
+            # Flush per line: the on-disk log is what /jobs/{id} serves, and a
+            # running build's log must be readable as it happens.
             job._logfh.write(line + "\n")
+            job._logfh.flush()
         for q in list(job._subscribers):
             await q.put(line)
 
@@ -170,8 +201,29 @@ class JobManager:
             await q.put(None)
 
     async def cancel(self, job: Job) -> None:
-        if job._proc and job.status == "running":
-            job.status = "canceled"
+        """Actually stop the build, not just relabel it.
+
+        The real work happens inside the container the job launched, and a
+        non-interactive bash defers signals until its foreground command
+        returns — so signalling the shell alone leaves the builder running while
+        the UI claims the job is canceled. Remove the container first (that ends
+        `docker run`), then signal the whole process group to catch the case
+        where we are still in `docker build`.
+        """
+        if not job._proc or job.status != "running":
+            return
+        job.status = "canceled"
+        try:
+            rm = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-f", container_name(job.id),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await rm.wait()
+        except OSError:
+            pass
+        try:
+            os.killpg(os.getpgid(job._proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
             try:
                 job._proc.terminate()
             except ProcessLookupError:

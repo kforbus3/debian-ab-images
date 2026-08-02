@@ -112,10 +112,8 @@ make server-logs
 Prefer a UI over the command line? Run the management console:
 
 ```bash
-cd webui
-cp .env.example .env      # set ADMIN_PASSWORD, SECRET_KEY, and HOST_PROJECT_DIR
-                          # (absolute path to this repo)
-docker compose up -d --build
+cp webui/.env.example webui/.env   # set ADMIN_PASSWORD and SECRET_KEY
+make webui
 ```
 
 Open **http://localhost:8080** to build images (with a live build log), manage the
@@ -124,15 +122,21 @@ imaged in real time. See [docs/WEBUI.md](docs/WEBUI.md).
 
 ## DHCP modes
 
-Set `MODE` in `server/.env`:
+The Provisioning page lists the host's network interfaces; pick the one facing
+the machines and everything else — server IP, subnet, lease range — is derived
+from it. DHCP and TFTP are then bound to **that interface alone**, so they
+cannot answer on, or interfere with, any other network the host is attached to.
 
-- **`proxy`** (default) — *coexists* with an existing DHCP server/router on the
-  LAN via proxyDHCP. It only answers PXE boot questions; your router still hands
-  out IPs. Best for most homelab/office networks.
-- **`dhcp`** — *standalone*. The server runs full DHCP and hands out IPs itself.
-  Best for an isolated/dedicated provisioning switch.
+- **`dhcp`** (default) — *standalone and self-contained*. This server owns the
+  provisioning network and hands out its own leases. Nothing else on the segment
+  is required. Use a dedicated NIC, switch, or VLAN.
+- **`proxy`** — *proxyDHCP*. Answers only PXE boot questions and leaves IP leases
+  to the network's existing DHCP server. Use when the machines have to stay on a
+  LAN you don't control.
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full configuration.
+Both modes serve iPXE, the imager, and the image from this app — nothing is
+fetched from the internet at boot time. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full configuration.
 
 ## Safety
 
