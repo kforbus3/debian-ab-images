@@ -14,7 +14,12 @@ set -u
 STAMP=/var/lib/first-boot-expand.done
 [ -f "$STAMP" ] && exit 0
 
-log() { echo "first-boot-expand: $*"; }
+# Bumped whenever this script changes behaviour, and logged on every run: an
+# image carries a copy of this file baked in at build time, so "did this machine
+# get the fix?" is otherwise only answerable by reading the file on the machine.
+VERSION=2
+
+log() { echo "first-boot-expand[v$VERSION]: $*"; }
 
 fs_size_bytes() {   # <mountpoint-or-device>
     df -B1 --output=size "$1" 2>/dev/null | tail -1 | tr -d ' '
@@ -65,6 +70,8 @@ crypt_resize() {
     log "  (crypttab lists no readable keyfile — has luks-enroll already run?)"
     return 1
 }
+
+log "starting"
 
 OVERLAY_FS="$(blkid -L overlay 2>/dev/null || true)"
 if [ -z "$OVERLAY_FS" ]; then

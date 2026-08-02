@@ -1,6 +1,12 @@
 [Unit]
 Description=Grow overlay partition to fill disk on first boot
-DefaultDependencies=no
+# RequiresMountsFor pulls in and orders after the generated mount unit for the
+# overlay, so the LUKS mapper is open and the filesystem is mounted before this
+# runs. Previously the unit carried DefaultDependencies=no with only
+# After=local-fs.target, which allowed it to run early enough that `blkid -L
+# overlay` could find nothing — and the old script treated that as "nothing to
+# do", stamped itself done and disabled itself, permanently.
+RequiresMountsFor=/var/lib/overlay
 After=local-fs.target
 Before=multi-user.target
 # Run before LUKS enrollment. On a tpm2/tang image, luks-enroll binds the
