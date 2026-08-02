@@ -1,0 +1,14 @@
+#!/bin/sh
+# Put what the overlay root needs into the initramfs: the overlay module, and
+# blkid for the unencrypted case where the partition is found by label.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+manual_add_modules overlay
+copy_exec /sbin/blkid /sbin 2>/dev/null || true
+exit 0

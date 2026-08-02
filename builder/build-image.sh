@@ -372,6 +372,9 @@ cat > "$MNT/etc/fstab" <<EOF
 # <file system>            <mount point>      <type> <options>      <dump> <pass>
 LABEL=BOOT                 /boot              ext4   defaults       0      2
 LABEL=EFI                  /boot/efi          vfat   umask=0077     0      1
+# The initramfs already mounts this and binds it here before switching root,
+# so the entry is x-systemd.automount-free and marked nofail: it is a no-op
+# on an overlay-root boot, and the real mount when booted with ab.overlay=off.
 LABEL=overlay              /var/lib/overlay   ext4   defaults,nofail 0     2
 tmpfs                      /tmp               tmpfs  defaults       0      0
 EOF
@@ -507,6 +510,10 @@ fi
 
 step "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
 cp -a "$OVERLAY_DIR"/etc/. "$MNT/etc/"
+# initramfs-tools silently ignores a script that is not executable, which would
+# leave the root overlay off with nothing in the log to say why.
+chmod 0755 "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay" \
+           "$MNT/etc/initramfs-tools/hooks/ab-overlay" 2>/dev/null || true
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
@@ -539,15 +546,27 @@ if [ "$ENCRYPT" = true ]; then
         echo 'KEYFILE_PATTERN="/etc/cryptsetup-keys.d/*.key"' >> "$MNT/etc/cryptsetup-initramfs/conf-hook"
         echo 'UMASK=0077' >> "$MNT/etc/initramfs-tools/initramfs.conf"
     fi
-    chroot "$MNT" update-initramfs -u
 fi
 
-step "Installing GRUB (BIOS + UEFI) and writing A/B config"
-chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
-# --removable puts GRUB at the fallback path (\EFI\BOOT\BOOTX64.EFI) so any
-# UEFI firmware boots it without an NVRAM entry — required for mass imaging,
-# where NVRAM can't be prepared per machine. Secure Boot must be disabled.
-chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+# The initramfs is generated when the kernel package is installed, which happens
+# before the overlay files are copied in -- so it has to be rebuilt here or the
+# root-overlay script simply would not be in it. This used to run only for
+# encrypted images, which would have left every unencrypted image booting
+# without the overlay and no clue as to why.
+log "Rebuilding initramfs (root overlay, and cryptsetup where enabled)"
+chroot "$MNT" update-initramfs -u
+
+if [ "$GRUB_BIOS" = 1 ]; then
+    step "Installing GRUB (BIOS + UEFI) and writing A/B config"
+    chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
+else
+    step "Installing GRUB (UEFI) and writing A/B config"
+fi
+# --removable puts GRUB at the firmware's fallback path -- BOOTX64.EFI on amd64,
+# BOOTAA64.EFI on arm64 -- so any UEFI firmware boots it without an NVRAM entry.
+# Required for mass imaging, where NVRAM cannot be prepared per machine. Secure
+# Boot must be disabled.
+chroot "$MNT" grub-install --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi \
     --boot-directory=/boot --removable --no-nvram
 KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | head -n1)"
 [ -n "$KVER" ] || die "no kernel found on BOOT partition"

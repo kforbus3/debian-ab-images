@@ -1,0 +1,115 @@
+#!/bin/sh
+# Make the root filesystem an overlay, with the big overlay partition on top.
+#
+# Without this the root slot is the only writable filesystem, so a user writing
+# to /home fills a 5 GiB partition while tens of gigabytes sit unused in
+# /var/lib/overlay. Worse, everything written to the root slot is destroyed the
+# next time an A/B update replaces it -- which is the whole point of A/B.
+#
+# So the slot becomes the read-only lower layer and every write lands on the
+# overlay partition instead. Nothing in userspace has to know: /home is simply
+# as large as the disk, and survives updates.
+#
+# Runs in local-bottom, after the root slot is mounted at $rootmnt and before
+# the switch to it. Add ab.overlay=off to the kernel command line to boot the
+# slot directly, which is the escape hatch if an upper layer ever goes bad.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+    prereqs) prereqs; exit 0;;
+esac
+
+[ -r /scripts/functions ] && . /scripts/functions
+
+msg() { echo "ab-overlay: $*" > /dev/kmsg 2>/dev/null || echo "ab-overlay: $*"; }
+
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in
+        ab.overlay=off) msg "disabled on the command line; booting the slot directly"; exit 0;;
+    esac
+done
+
+# The overlay is normally an unlocked LUKS volume by now: the initramfs holds
+# every crypttab entry so it can unlock whichever slot it was told to boot, and
+# the overlay comes along with them. An unencrypted image has it by label.
+OVL=/dev/mapper/luks-overlay
+if [ ! -b "$OVL" ]; then
+    OVL="$(blkid -L overlay 2>/dev/null || true)"
+fi
+if [ ! -b "$OVL" ]; then
+    msg "no overlay device; booting the slot directly"
+    exit 0
+fi
+
+modprobe overlay >/dev/null 2>&1 || true
+
+mkdir -p /ab-lower /ab-rw
+
+# The slot needs a second, stable reference to serve as the lower layer. A bind
+# is used rather than `mount --move`: the initramfs leaves $rootmnt shared, and
+# --move refuses a shared mount outright -- which is exactly how this silently
+# fell back to a plain root the first time. Making it private and moving it
+# would also work, but a bind leaves the original mount untouched, so a failure
+# anywhere below costs nothing.
+# `-o bind` rather than `--bind`: the initramfs ships klibc's minimal mount,
+# which understands the -o form but none of util-linux's long options. Using
+# --bind (or --move) silently fails there, which is precisely how this fell back
+# to a plain root twice while looking like it had run.
+bind_mount() { mount -o bind "$1" "$2" 2>/dev/null || mount --bind "$1" "$2" 2>/dev/null; }
+
+if ! bind_mount "$rootmnt" /ab-lower; then
+    msg "could not bind the root slot as a lower layer; booting it directly"
+    exit 0
+fi
+
+undo() {                       # leave the slot exactly as it was found
+    umount /ab-rw 2>/dev/null || true
+    umount /ab-lower 2>/dev/null || true
+    msg "$1 -- booting the slot directly"
+    exit 0
+}
+
+mount -t ext4 "$OVL" /ab-rw 2>/dev/null || undo "overlay filesystem would not mount"
+
+# --- reconcile the upper layer with the slot being booted --------------------
+#
+# The upper layer was written against whichever slot was running at the time. If
+# that is not this slot, anything it holds for an OS-owned path now shadows a
+# file the update was supposed to replace -- a binary from the old release
+# masking the new one, and no way to tell from inside the running system. Those
+# paths are dropped on a slot change; everything a person or a service owns is
+# kept, which is what makes the overlay worth having.
+SLOT=""
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in rauc.slot=*) SLOT="${arg#rauc.slot=}";; esac
+done
+LAST=""
+[ -r /ab-rw/.slot ] && LAST="$(cat /ab-rw/.slot 2>/dev/null)"
+
+if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
+    msg "slot changed ${LAST} -> ${SLOT}; clearing OS paths from the upper layer"
+    for d in usr bin sbin lib lib32 lib64 libx32 boot \
+             var/lib/dpkg var/lib/apt var/cache/apt; do
+        rm -rf "/ab-rw/upper/$d" 2>/dev/null || true
+    done
+fi
+[ -n "$SLOT" ] && { printf '%s\n' "$SLOT" > /ab-rw/.slot 2>/dev/null || true; }
+
+mkdir -p /ab-rw/upper /ab-rw/work /ab-rw/persistent 2>/dev/null || true
+
+if ! mount -t overlay ab-root \
+        -o "lowerdir=/ab-lower,upperdir=/ab-rw/upper,workdir=/ab-rw/work" \
+        "$rootmnt" 2>/dev/null; then
+    undo "overlay mount failed"
+fi
+
+# Both layers stay reachable from inside the running system: /var/lib/overlay so
+# the partition is where fstab and everything else expect it, and /run/ab-lower
+# so the untouched slot can be inspected -- which is how you tell whether a file
+# came from the image or from something written afterwards.
+mkdir -p "$rootmnt/var/lib/overlay" "$rootmnt/run/ab-lower" 2>/dev/null || true
+bind_mount /ab-rw "$rootmnt/var/lib/overlay" || true
+bind_mount /ab-lower "$rootmnt/run/ab-lower" || true
+
+msg "root is now an overlay (lower=slot ${SLOT:-?}, upper=overlay partition)"
+exit 0

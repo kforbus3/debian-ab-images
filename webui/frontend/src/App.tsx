@@ -8,6 +8,7 @@ import Build from "./pages/Build";
 import Images from "./pages/Images";
 import Jobs from "./pages/Jobs";
 import Provisioning from "./pages/Provisioning";
+import Imaging from "./pages/Imaging";
 
 function Protected({ children }: { children: JSX.Element }) {
   const { authed, loading } = useAuth();
@@ -25,6 +26,7 @@ export default function App() {
       <Route path="/images" element={<Protected><Images /></Protected>} />
       <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
       <Route path="/provisioning" element={<Protected><Provisioning /></Protected>} />
+      <Route path="/imaging" element={<Protected><Imaging /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
