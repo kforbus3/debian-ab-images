@@ -1,8 +1,10 @@
+import json
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app import orchestrator as orch
-from app.jobs import jobs
+from app.jobs import _ProgressEvent as ProgressEvent, jobs
 from app.security import create_stream_token, require_auth, verify_stream_token
 
 router = APIRouter(tags=["builds"])
@@ -12,6 +14,10 @@ router = APIRouter(tags=["builds"])
 _BOOT_MIB = 512
 _ESP_MIB = 128
 _MIN_OVERLAY_MIB = 256
+# Mirrors build-image.sh: Ubuntu's linux-image-generic hard-depends on
+# linux-firmware and linux-modules-extra, which Debian never installs. The
+# builder raises the slot to this floor, so validate against the same number.
+_MIN_ROOT_MIB = {"ubuntu": 5120, "debian": 2560}
 
 
 def _require_ready() -> None:
@@ -26,7 +32,8 @@ def _validate_build(opts: dict) -> None:
     try:
         # 0 / "auto" = smallest possible; the image expands on first boot.
         image_mib = 0 if size in ("auto", 0, "0", "", None) else int(size) * 1024
-        root_mib = int(opts.get("root_size", 3072))
+        root_mib = max(int(opts.get("root_size", 3072)),
+                       _MIN_ROOT_MIB.get(opts.get("distro", "debian"), 2560))
     except (TypeError, ValueError):
         raise HTTPException(400, "image_size and root_size must be numbers (or image_size 'auto')")
     if root_mib < 1024:
@@ -113,8 +120,11 @@ async def stream_job(job_id: str, token: str = ""):
         raise HTTPException(404, "Job not found")
 
     async def gen():
-        async for line in jobs.subscribe(job):
-            yield f"data: {line}\n\n"
+        async for item in jobs.subscribe(job):
+            if isinstance(item, ProgressEvent):
+                yield f"event: progress\ndata: {json.dumps(item.data)}\n\n"
+            else:
+                yield f"data: {item}\n\n"
         yield f"event: end\ndata: {job.status}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")

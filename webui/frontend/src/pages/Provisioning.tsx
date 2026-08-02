@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Play, Square, RefreshCw, Save, Monitor } from "lucide-react";
+import { Play, Square, RefreshCw, Save, Monitor, Plus, Trash2 } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Alert } from "../components/ui";
 
+interface Assignment { mac: string; image: string; action: string; name: string; }
 interface Iface { name: string; ip: string; prefixlen: number; network: string; netmask: string; up: boolean; default: boolean; }
 
 export default function Provisioning() {
@@ -16,6 +17,7 @@ export default function Provisioning() {
   const [ifaces, setIfaces] = useState<Iface[]>([]);
   const [problems, setProblems] = useState<string[]>([]);
   const [advanced, setAdvanced] = useState(false);
+  const [assign, setAssign] = useState<Assignment[]>([]);
 
   async function loadAll() {
     try {
@@ -24,8 +26,24 @@ export default function Provisioning() {
     } catch (e) { toast.error(apiError(e)); }
     api.get("/server/interfaces").then((r) => setIfaces(r.data)).catch(() => {});
     api.get("/server/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
+    loadAssignments();
   }
   async function loadClients() { try { setClients((await api.get("/server/clients")).data); } catch {} }
+  async function loadAssignments() {
+    try { setAssign((await api.get("/server/assignments")).data); } catch {}
+  }
+
+  async function saveAssignments(next: Assignment[]) {
+    try {
+      const { data } = await api.put("/server/assignments", next);
+      setAssign(data); toast.success("Assignments saved");
+    } catch (e) { toast.error(apiError(e)); }
+  }
+  const addAssignment = (mac = "") =>
+    setAssign((a) => [...a, { mac, image: images[0] || "", action: "", name: "" }]);
+  const setAssignment = (i: number, k: keyof Assignment, v: string) =>
+    setAssign((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const removeAssignment = (i: number) => setAssign((a) => a.filter((_, j) => j !== i));
 
   useEffect(() => { loadAll(); }, []);
   useEffect(() => {
@@ -164,10 +182,69 @@ export default function Provisioning() {
             <p className="py-10 text-center text-sm text-zinc-500">{running ? "No machines have PXE-booted yet." : "Start the server to monitor machines."}</p>
           ) : (
             <table className="w-full text-left text-sm">
-              <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500"><th className="px-3 py-2">MAC</th><th className="px-3 py-2">IP</th><th className="px-3 py-2">Status</th></tr></thead>
+              <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500"><th className="px-3 py-2">MAC</th><th className="px-3 py-2">IP</th><th className="px-3 py-2">Status</th><th /></tr></thead>
               <tbody className="divide-y divide-zinc-800/70">
-                {clients.map((c) => (
-                  <tr key={c.mac + c.ip}><td className="px-3 py-2 font-mono text-xs text-zinc-300">{c.mac}</td><td className="px-3 py-2 text-zinc-400">{c.ip || "—"}</td><td className="px-3 py-2"><Badge color={c.event === "imaged" ? "green" : "blue"}>{c.event || "seen"}</Badge></td></tr>
+                {clients.map((c) => {
+                  const targeted = assign.some((a) => a.mac === (c.mac || "").toLowerCase());
+                  return <tr key={c.mac + c.ip}>
+                    <td className="px-3 py-2 font-mono text-xs text-zinc-300">{c.mac}</td>
+                    <td className="px-3 py-2 text-zinc-400">{c.ip || "—"}</td>
+                    <td className="px-3 py-2"><Badge color={c.event === "imaged" ? "green" : "blue"}>{c.event || "seen"}</Badge></td>
+                    <td className="px-3 py-2 text-right">
+                      {targeted ? <span className="text-xs text-zinc-500">targeted</span>
+                        : c.mac && c.mac !== "—" &&
+                          <button onClick={() => addAssignment(c.mac.toLowerCase())}
+                            className="text-xs text-brand-400 hover:text-brand-300">assign image…</button>}
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        <Card className="p-5 lg:col-span-2">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Per-machine images</h2>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => addAssignment()}><Plus size={13} /> Add machine</Button>
+              <Button size="sm" onClick={() => saveAssignments(assign)}><Save size={13} /> Save assignments</Button>
+            </div>
+          </div>
+          <p className="mb-3 text-xs text-zinc-500">
+            Machines listed here get the image you choose; every other machine on the
+            switch gets the default image above. Matching is by MAC at boot, so you can
+            plug in a whole switch and still send one box a different build.
+          </p>
+          {assign.length === 0 ? (
+            <p className="py-6 text-center text-sm text-zinc-500">
+              No per-machine targeting — every machine that boots gets{" "}
+              <span className="text-zinc-300">{cfg.IMAGE_FILE || "the default image"}</span>.
+            </p>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
+                <th className="px-2 py-2">MAC address</th><th className="px-2 py-2">Label</th>
+                <th className="px-2 py-2">Image</th><th className="px-2 py-2">After imaging</th><th />
+              </tr></thead>
+              <tbody className="divide-y divide-zinc-800/70">
+                {assign.map((a, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-2"><Input className="font-mono text-xs" value={a.mac} placeholder="00:11:22:33:44:55"
+                      onChange={(e) => setAssignment(i, "mac", e.target.value)} /></td>
+                    <td className="px-2 py-2"><Input value={a.name} placeholder="optional"
+                      onChange={(e) => setAssignment(i, "name", e.target.value)} /></td>
+                    <td className="px-2 py-2"><Select value={a.image} onChange={(e) => setAssignment(i, "image", e.target.value)}>
+                      <option value="">— select —</option>{images.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </Select></td>
+                    <td className="px-2 py-2"><Select value={a.action} onChange={(e) => setAssignment(i, "action", e.target.value)}>
+                      <option value="">same as default</option><option value="reboot">reboot</option>
+                      <option value="poweroff">poweroff</option><option value="shell">shell</option>
+                    </Select></td>
+                    <td className="px-2 py-2 text-right">
+                      <button onClick={() => removeAssignment(i)} className="text-zinc-500 hover:text-red-400"><Trash2 size={15} /></button>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>

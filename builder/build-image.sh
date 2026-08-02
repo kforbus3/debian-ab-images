@@ -95,6 +95,17 @@ log()  { echo -e "\033[0;32m[build]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[build]\033[0m $*"; }
 die()  { echo -e "\033[0;31m[build] ERROR:\033[0m $*" >&2; exit 1; }
 
+# Machine-readable progress. The web UI parses these lines into a progress bar;
+# on a terminal they read as ordinary step markers. Emitted in addition to the
+# human log so neither consumer depends on parsing prose.
+BUILD_STEP=0
+BUILD_STEPS=14
+step() {
+    BUILD_STEP=$((BUILD_STEP + 1))
+    printf '[progress] %d/%d %s\n' "$BUILD_STEP" "$BUILD_STEPS" "$1"
+    log "$1"
+}
+
 # --- Resolve distro (auto-detect from suite when not given) ---
 if [ -z "$DISTRO" ]; then
     case "$SUITE" in
@@ -124,6 +135,16 @@ case "$DISTRO" in
         ;;
     *) die "--distro must be debian or ubuntu";;
 esac
+# Minimum workable root slot, measured per distro. Ubuntu's linux-image-generic
+# hard-depends on linux-firmware and linux-modules-extra (~1.7 GiB installed),
+# which Debian's linux-image-amd64 does not — so the same 3 GiB slot that is
+# comfortable on Debian overflows on Ubuntu partway through initramfs
+# generation. Enforced below rather than left to fail deep in a dpkg run.
+case "$DISTRO" in
+    ubuntu) MIN_ROOT=5120;;
+    *)      MIN_ROOT=2560;;
+esac
+
 OS_PRETTY="$(tr '[:lower:]' '[:upper:]' <<< "${DISTRO:0:1}")${DISTRO:1}"
 HOSTNAME_="${HOSTNAME_:-${DISTRO}-ab}"
 OUTPUT="${OUTPUT:-/output/${DISTRO}-${SUITE}-ab.img}"
@@ -148,6 +169,15 @@ if [ "$ENCRYPT" = true ]; then
     [ "$UNLOCK" = tang ] && [ -z "$TANG_URL" ] && die "--unlock tang requires --tang-url"
 fi
 
+# Raise rather than refuse: the caller asked for an image, and a slot too small
+# to hold the OS is never what they wanted. The image still auto-sizes and the
+# overlay still expands on first boot, so the only visible effect is a larger
+# file — much better than failing 15 minutes in.
+if [ "$ROOT_SIZE" -lt "$MIN_ROOT" ]; then
+    warn "root slot ${ROOT_SIZE} MiB is below the ${MIN_ROOT} MiB minimum for $OS_PRETTY; using ${MIN_ROOT} MiB"
+    ROOT_SIZE="$MIN_ROOT"
+fi
+
 OVERLAY_DIR="$(cd "$(dirname "$0")/overlay" && pwd)"
 RAW="${OUTPUT%.img}.img"
 WORK="$(mktemp -d)"
@@ -160,7 +190,10 @@ MAPPERS=()
 cleanup() {
     set +e
     mountpoint -q "$MNT/dev/pts" && umount "$MNT/dev/pts"
-    for m in dev proc sys boot/efi boot var/lib/overlay; do
+    # var/cache/apt/archives is the APT cache bind mount; it is nested under
+    # $MNT and must come off before $MNT itself, or the final umount fails and
+    # the loop device stays attached.
+    for m in var/cache/apt/archives dev proc sys boot/efi boot var/lib/overlay; do
         mountpoint -q "$MNT/$m" && umount "$MNT/$m"
     done
     mountpoint -q "$WORK/b" && umount "$WORK/b"
@@ -192,7 +225,7 @@ fi
 rm -f "$RAW"
 truncate -s "${TOTAL_MIB}M" "$RAW"
 
-log "Partitioning (GPT, hybrid BIOS+UEFI, A/B)"
+step "Partitioning (GPT, hybrid BIOS+UEFI, A/B)"
 parted -s "$RAW" mklabel gpt
 parted -s "$RAW" mkpart bios     1MiB ${E_START}MiB
 parted -s "$RAW" set 1 bios_grub on
@@ -203,7 +236,21 @@ parted -s "$RAW" mkpart rootfs-a ext4 ${B_END}MiB    ${A_END}MiB
 parted -s "$RAW" mkpart rootfs-b ext4 ${A_END}MiB    ${BB_END}MiB
 parted -s "$RAW" mkpart overlay  ext4 ${BB_END}MiB   100%
 
-LOOP="$(losetup -f --show -P "$RAW")"
+# Docker gives this container a private /dev that no udev populates, so the loop
+# device the kernel hands out often has no node here and losetup fails with
+# "device node /dev/loopN (7:N) is lost. You may use mknod(1) to recover it."
+# Create the nodes ourselves. (Docker Desktop pre-creates loop0-3 in its VM,
+# which is why this can appear to work on a Mac and fail on a Linux host — and
+# why it would fail anywhere once those four are busy.)
+modprobe loop 2>/dev/null || true
+[ -e /dev/loop-control ] || mknod /dev/loop-control c 10 237 2>/dev/null || true
+for i in $(seq 0 15); do
+    [ -e "/dev/loop$i" ] || mknod "/dev/loop$i" b 7 "$i" 2>/dev/null || true
+done
+
+LOOP="$(losetup -f --show -P "$RAW")" || die \
+    "could not attach a loop device. The builder needs --privileged and a host
+kernel with the loop module available (modprobe loop)."
 log "Loop device: $LOOP"
 partprobe "$LOOP" 2>/dev/null || true
 LOOP_BASE="$(basename "$LOOP")"
@@ -245,14 +292,21 @@ if [ "$ENCRYPT" = true ]; then
     DEV_OVL=/dev/mapper/luks-overlay
 fi
 
-log "Formatting filesystems"
+step "Formatting filesystems"
+# The builder runs Debian trixie, whose mke2fs (1.47.x) enables orphan_file and
+# metadata_csum_seed by default. GRUB 2.06 — what Ubuntu 22.04 ships — cannot
+# read either, so grub-install dies with a bare "error: unknown filesystem"; the
+# target's own older e2fsprogs would fail to fsck them too. Debian trixie's GRUB
+# 2.12 copes, which is exactly why this only ever broke Ubuntu images. Turning
+# both off costs nothing measurable and keeps images readable by older tooling.
+EXT4_COMPAT="^orphan_file,^metadata_csum_seed"
 mkfs.vfat -F32 -n EFI    "$P_ESP" >/dev/null
-mkfs.ext4 -q -L BOOT     "$P_BOOT"
-mkfs.ext4 -q -L rootfs-a "$DEV_A"
-mkfs.ext4 -q -L rootfs-b "$DEV_B"
-mkfs.ext4 -q -L overlay  "$DEV_OVL"
+mkfs.ext4 -q -O "$EXT4_COMPAT" -L BOOT     "$P_BOOT"
+mkfs.ext4 -q -O "$EXT4_COMPAT" -L rootfs-a "$DEV_A"
+mkfs.ext4 -q -O "$EXT4_COMPAT" -L rootfs-b "$DEV_B"
+mkfs.ext4 -q -O "$EXT4_COMPAT" -L overlay  "$DEV_OVL"
 
-log "Mounting root slot A"
+step "Mounting root slot A"
 mkdir -p "$MNT"
 mount "$DEV_A" "$MNT"
 mkdir -p "$BOOTMNT" "$MNT/var/lib/overlay"
@@ -261,12 +315,12 @@ mkdir -p "$BOOTMNT/efi"
 mount "$P_ESP" "$BOOTMNT/efi"
 mount "$DEV_OVL" "$MNT/var/lib/overlay"
 
-log "Bootstrapping $OS_PRETTY $SUITE ($ARCH)"
+step "Bootstrapping $OS_PRETTY $SUITE ($ARCH)"
 debootstrap --arch="$ARCH" --variant=minbase $DEBOOTSTRAP_OPTS \
     --include=systemd-sysv,ifupdown,netbase \
     "$SUITE" "$MNT" "$MIRROR"
 
-log "Binding pseudo-filesystems for chroot"
+step "Binding pseudo-filesystems for chroot"
 mount --bind /dev "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount -t proc proc "$MNT/proc"
@@ -274,7 +328,7 @@ mount -t sysfs sys "$MNT/sys"
 
 mkdir -p "$MNT/var/lib/overlay/upper" "$MNT/var/lib/overlay/work" "$MNT/var/lib/overlay/persistent"
 
-log "Writing base configuration"
+step "Writing base configuration"
 echo "$HOSTNAME_" > "$MNT/etc/hostname"
 cat > "$MNT/etc/hosts" <<EOF
 127.0.0.1   localhost
@@ -348,7 +402,16 @@ luks-overlay      UUID=$UUID_OVL           $KEYREF_OVL   luks,discard$NETOPT
 EOF
 fi
 
-log "Installing kernel, bootloader, and tooling in chroot"
+step "Installing kernel, bootloader, and tooling in chroot"
+# Keep APT's downloaded .debs OUT of the root slot. Ubuntu pulls ~460 MB of
+# archives (linux-firmware and linux-modules-extra dominate), and holding those
+# alongside the unpacked files is enough on its own to exhaust a 3 GiB slot —
+# initramfs generation then dies with a bare "No space left on device". The
+# cache lives on the builder's own filesystem instead and is discarded after.
+APTCACHE="$WORK/aptcache"
+mkdir -p "$APTCACHE" "$MNT/var/cache/apt/archives"
+mount --bind "$APTCACHE" "$MNT/var/cache/apt/archives"
+
 cat > "$MNT/tmp/setup.sh" <<CHROOT
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -366,14 +429,26 @@ useradd -m -s /bin/bash -G sudo "${USERNAME}"
 echo "${USERNAME}:${PASSWORD}" | chpasswd
 passwd -l root
 CHROOT
-chroot "$MNT" bash /tmp/setup.sh
+if ! chroot "$MNT" bash /tmp/setup.sh; then
+    used="$(df -Pm "$MNT" | awk 'NR==2 {print $3}')"
+    avail="$(df -Pm "$MNT" | awk 'NR==2 {print $4}')"
+    if [ "${avail:-1}" -lt 64 ]; then
+        die "the root slot filled up while installing packages (${used} MiB used, \
+${avail} MiB free in a ${ROOT_SIZE} MiB slot).
+Rebuild with a larger --root-size — $OS_PRETTY $SUITE needs about ${MIN_ROOT} MiB \
+for the base system, kernel and initramfs before any extra packages."
+    fi
+    die "package installation failed in the chroot (see the apt/dpkg output above)"
+fi
 rm -f "$MNT/tmp/setup.sh"
+umount "$MNT/var/cache/apt/archives"
+rm -rf "$APTCACHE"
 
 # Every machine imaged from this build must get its own identity. Blank the
 # machine-id and drop the build-time SSH host keys; machine-identity.service
 # regenerates them on first boot and persists them in the overlay so they
 # survive A/B slot switches and updates.
-log "Resetting machine identity (machine-id, SSH host keys)"
+step "Resetting machine identity (machine-id, SSH host keys)"
 truncate -s0 "$MNT/etc/machine-id"
 install -d "$MNT/var/lib/dbus"
 ln -sf /etc/machine-id "$MNT/var/lib/dbus/machine-id"
@@ -398,7 +473,7 @@ ChallengeResponseAuthentication no
 EOF
 fi
 
-log "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
+step "Applying overlay files (RAUC, GRUB, first-boot expand, LUKS enroll)"
 cp -a "$OVERLAY_DIR"/etc/. "$MNT/etc/"
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
@@ -435,7 +510,7 @@ if [ "$ENCRYPT" = true ]; then
     chroot "$MNT" update-initramfs -u
 fi
 
-log "Installing GRUB (BIOS + UEFI) and writing A/B config"
+step "Installing GRUB (BIOS + UEFI) and writing A/B config"
 chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot --recheck "$LOOP"
 # --removable puts GRUB at the fallback path (\EFI\BOOT\BOOTX64.EFI) so any
 # UEFI firmware boots it without an NVRAM entry — required for mass imaging,
@@ -450,7 +525,7 @@ sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" \
 chroot "$MNT" grub-editenv /boot/grub/grubenv create
 chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" A_TRY=0 B_TRY=0
 
-log "Syncing root slot A -> slot B"
+step "Syncing root slot A -> slot B"
 umount "$MNT/dev/pts" "$MNT/dev" "$MNT/proc" "$MNT/sys"
 umount "$MNT/var/lib/overlay"
 umount "$BOOTMNT/efi"
@@ -470,13 +545,13 @@ losetup -d "$LOOP"; LOOP=""
 
 log "Image built: $RAW"
 case "$COMPRESS" in
-    zstd) log "Compressing with zstd"; zstd -f -19 -T0 --rm "$RAW" -o "${RAW}.zst"; OUT="${RAW}.zst";;
-    gzip) log "Compressing with gzip"; gzip -f "$RAW"; OUT="${RAW}.gz";;
-    none) OUT="$RAW";;
-    *) warn "Unknown compression '$COMPRESS', leaving raw"; OUT="$RAW";;
+    zstd) step "Compressing with zstd (slowest step on a large image)"; zstd -f -19 -T0 --rm "$RAW" -o "${RAW}.zst"; OUT="${RAW}.zst";;
+    gzip) step "Compressing with gzip"; gzip -f "$RAW"; OUT="${RAW}.gz";;
+    none) step "Skipping compression"; OUT="$RAW";;
+    *) warn "Unknown compression '$COMPRESS', leaving raw"; step "Skipping compression"; OUT="$RAW";;
 esac
 
-log "Writing SHA256 checksum and metadata sidecars"
+step "Writing SHA256 checksum and metadata sidecars"
 ( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" )
 cat > "${OUT}.json" <<EOF
 {
@@ -495,6 +570,6 @@ cat > "${OUT}.json" <<EOF
 }
 EOF
 
-log "Done: $OUT"
+step "Done"
 [ "$ENCRYPT" = true ] && log "Encryption: LUKS2, unlock=$UNLOCK (passphrase is also enrolled for recovery)"
 ls -lh "$OUT" "${OUT}.sha256" "${OUT}.json"

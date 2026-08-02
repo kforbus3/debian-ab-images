@@ -51,6 +51,18 @@ export function Alert({ title, items }: { title: string; items: string[] }) {
     </ul>
   </div>;
 }
+export function ProgressBar({ step, total, label }: { step: number; total: number; label: string }) {
+  const pct = total > 0 ? Math.round((step / total) * 100) : 0;
+  return <div className="mb-3">
+    <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+      <span className="truncate text-zinc-300">{label}</span>
+      <span className="shrink-0 tabular-nums text-zinc-500">step {step} of {total} · {pct}%</span>
+    </div>
+    <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+      <div className="h-full rounded-full bg-brand-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+    </div>
+  </div>;
+}
 export function LogView({ lines }: { lines: string[] }) {
   const ref = useRef<HTMLPreElement>(null);
   const pinned = useRef(true);

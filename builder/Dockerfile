@@ -18,7 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         qemu-user-static \
         binfmt-support \
+        kmod \
     && rm -rf /var/lib/apt/lists/*
+
+# parted shells out to `udevadm settle` after every partition change. No udev
+# daemon runs in a container, so the real thing would be a no-op at best — but
+# without it parted prints "sh: 1: udevadm: not found" for each call, burying
+# the build log in noise. Settling is handled explicitly instead: build-image.sh
+# polls sysfs and creates the partition nodes itself. The `udev` package is not
+# an option here; it pulls in all of systemd.
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/sbin/udevadm \
+    && chmod +x /usr/local/sbin/udevadm
 
 WORKDIR /build
 COPY build-image.sh /build/build-image.sh

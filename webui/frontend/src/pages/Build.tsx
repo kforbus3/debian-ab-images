@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hammer, Cpu, XCircle } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
-import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert } from "../components/ui";
+import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert, ProgressBar } from "../components/ui";
 
 const SUITES: Record<string, { value: string; label: string }[]> = {
   debian: [
@@ -29,6 +29,7 @@ export default function Build() {
   const [status, setStatus] = useState<string>("");
   const [jobId, setJobId] = useState<string>("");
   const [problems, setProblems] = useState<string[]>([]);
+  const [progress, setProgress] = useState<{ step: number; total: number; label: string } | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => () => esRef.current?.close(), []);
@@ -44,12 +45,13 @@ export default function Build() {
   }, []);
 
   async function stream(id: string) {
-    setLog([]); setRunning(true); setStatus("running"); setJobId(id);
+    setLog([]); setProgress(null); setRunning(true); setStatus("running"); setJobId(id);
     // Streams are authorized by a short-lived per-job token, not the session JWT.
     const { data } = await api.get(`/jobs/${id}/stream-token`);
     const es = new EventSource(`/api/jobs/${id}/stream?token=${data.token}`);
     esRef.current = es;
     es.onmessage = (e) => setLog((l) => [...l, e.data]);
+    es.addEventListener("progress", (e: any) => { try { setProgress(JSON.parse(e.data)); } catch {} });
     es.addEventListener("end", (e: any) => {
       es.close(); setRunning(false); setStatus(e.data);
       e.data === "success" ? toast.success("Build finished") : toast.error(`Build ${e.data}`);
@@ -70,7 +72,15 @@ export default function Build() {
     catch (e) { toast.error(apiError(e)); }
   }
   const set = (k: string, v: any) => setOpts((o) => ({ ...o, [k]: v }));
-  const neededMiB = 2 * (+opts.root_size || 0) + 512 + 128 + 2 + 256;
+  // The builder raises the root slot to a per-distro floor (Ubuntu's kernel
+  // hard-depends on linux-firmware + linux-modules-extra, ~1.7 GiB Debian never
+  // installs). Mirror that here so the size warning and the note below reflect
+  // what will actually be built rather than what was typed.
+  const MIN_ROOT: Record<string, number> = { ubuntu: 5120, debian: 2560 };
+  const minRoot = MIN_ROOT[opts.distro] ?? 2560;
+  const effRoot = Math.max(+opts.root_size || 0, minRoot);
+  const rootRaised = effRoot > (+opts.root_size || 0);
+  const neededMiB = 2 * effRoot + 512 + 128 + 2 + 256;
   // 0 = auto: the builder picks the smallest size (it expands on first boot).
   const sizeTooSmall = +opts.image_size > 0 && +opts.image_size * 1024 < neededMiB;
   const setDistro = (d: string) => setOpts((o) => ({
@@ -134,7 +144,11 @@ export default function Build() {
           </Button>
           {!opts.password && <p className="mt-2 text-xs text-amber-400">Set a login password to enable the build.</p>}
           {sizeTooSmall && <p className="mt-2 text-xs text-amber-400">
-            Image too small: two {opts.root_size} MiB root slots + boot + overlay need ≈{Math.ceil(neededMiB / 1024)} GiB.
+            Image too small: two {effRoot} MiB root slots + boot + overlay need ≈{Math.ceil(neededMiB / 1024)} GiB.
+          </p>}
+          {rootRaised && <p className="mt-2 text-xs text-zinc-500">
+            Root slot will be raised to {effRoot} MiB — {opts.distro === "ubuntu" ? "Ubuntu" : "this distribution"}
+            {" "}needs it for the kernel and firmware. Expect a ≈{Math.ceil(neededMiB / 1024)} GiB image.
           </p>}
         </Card>
         <Card className="p-5">
@@ -145,6 +159,7 @@ export default function Build() {
               {status && <Badge color={status === "success" ? "green" : status === "running" ? "amber" : "red"}>{status}</Badge>}
             </div>
           </div>
+          {progress && <ProgressBar {...progress} />}
           <LogView lines={log} />
         </Card>
       </div>

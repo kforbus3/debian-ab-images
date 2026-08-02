@@ -21,6 +21,12 @@ JobStatus = Literal["running", "success", "failed", "canceled"]
 # — that keeps both the live stream and the persisted log clean.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
+# build-image.sh emits "[progress] 7/14 Installing kernel..." alongside its
+# normal log line. These are control data for the progress bar, not log content
+# — the human-readable "[build] ..." line covers the log — so they are recorded
+# and then dropped rather than shown twice.
+_PROGRESS_RE = re.compile(r"^\[progress\] (\d+)/(\d+) (.*)$")
+
 # Orchestrator command templates carry this token where the job id belongs; it
 # is substituted in start(), which is the first place the id is known.
 JOB_TOKEN = "%JOB%"
@@ -29,6 +35,15 @@ JOB_TOKEN = "%JOB%"
 def container_name(job_id: str) -> str:
     """Name of the container a job runs its work in, so cancel can remove it."""
     return f"dab-{job_id}"
+
+
+class _ProgressEvent:
+    """Marks a queue item as a progress update rather than a log line."""
+
+    __slots__ = ("data",)
+
+    def __init__(self, data: dict) -> None:
+        self.data = data
 
 
 @dataclass
@@ -43,6 +58,7 @@ class Job:
     started: str = ""
     finished: str = ""
     env: dict[str, str] | None = None
+    progress: dict | None = None
     _proc: asyncio.subprocess.Process | None = None
     _subscribers: list[asyncio.Queue] = field(default_factory=list)
     _logfh: object | None = None
@@ -57,6 +73,7 @@ class Job:
             "started": self.started,
             "finished": self.finished,
             "lines": len(self.lines),
+            "progress": self.progress,
         }
 
 
@@ -179,6 +196,13 @@ class JobManager:
 
     async def _emit(self, job: Job, line: str) -> None:
         line = _ANSI_RE.sub("", line)
+        m = _PROGRESS_RE.match(line)
+        if m:
+            job.progress = {"step": int(m.group(1)), "total": int(m.group(2)),
+                            "label": m.group(3)}
+            for q in list(job._subscribers):
+                await q.put(_ProgressEvent(job.progress))
+            return
         job.lines.append(line)
         if len(job.lines) > 5000:
             job.lines = job.lines[-5000:]
@@ -230,9 +254,16 @@ class JobManager:
                 pass
 
     async def subscribe(self, job: Job):
-        """Yield existing lines, then live lines until the job ends."""
+        """Yield existing lines, then live output until the job ends.
+
+        Yields `str` for log lines and `_ProgressEvent` for progress updates;
+        the router turns each into the matching SSE event type. Progress is
+        replayed first so a reattaching browser shows the right bar immediately
+        instead of waiting for the next step boundary — which can be minutes.
+        """
         q: asyncio.Queue = asyncio.Queue()
-        # Replay backlog.
+        if job.progress:
+            yield _ProgressEvent(job.progress)
         for line in list(job.lines):
             yield line
         if job.status != "running":
@@ -240,10 +271,10 @@ class JobManager:
         job._subscribers.append(q)
         try:
             while True:
-                line = await q.get()
-                if line is None:
+                item = await q.get()
+                if item is None:
                     break
-                yield line
+                yield item
         finally:
             if q in job._subscribers:
                 job._subscribers.remove(q)
