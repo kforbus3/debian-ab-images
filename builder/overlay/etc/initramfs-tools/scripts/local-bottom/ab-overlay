@@ -97,9 +97,13 @@ fi
 
 mkdir -p /ab-rw/upper /ab-rw/work /ab-rw/persistent 2>/dev/null || true
 
-if ! mount -t overlay ab-root \
-        -o "lowerdir=/ab-lower,upperdir=/ab-rw/upper,workdir=/ab-rw/work" \
-        "$rootmnt" 2>/dev/null; then
+# Every option goes before the device. klibc's mount parses with getopt, which
+# stops at the first non-option argument: with the device first, the trailing
+# -o is read as a positional and the whole call dies with a usage message. That
+# is what "overlay mount failed" was -- not a rejection by overlayfs, which
+# mounts these exact directories without complaint.
+if ! mount -t overlay -o "lowerdir=/ab-lower,upperdir=/ab-rw/upper,workdir=/ab-rw/work" \
+        ab-root "$rootmnt" 2>/dev/null; then
     undo "overlay mount failed"
 fi
 
