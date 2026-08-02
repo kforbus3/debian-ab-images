@@ -26,7 +26,7 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--hostname` | `debian-ab` | Image hostname |
 | `--username` | `debian` | Login user (added to `sudo`) |
 | `--password` | `debian` | Password for that user |
-| `--root-size` | `3072` | MiB per root slot |
+| `--root-size` | `3072` | MiB per root slot (raised to a per-distro minimum — see [Root slot sizing](#root-slot-sizing)) |
 | `--image-size` | `auto` | Total image size in GiB; `auto` = smallest possible |
 | `--packages "a b"` | — | Extra packages to install |
 | `--ssh-pubkey FILE` | — | Install an authorized SSH key for the user (from a file) |
@@ -63,9 +63,27 @@ to any larger disk, and smaller images write faster during mass imaging.
   `<image>.json` metadata sidecar (distro, release, sizes, encryption) consumed
   by the web UI.
 
-Ubuntu images use the `linux-image-generic` kernel, which pulls in
-`linux-firmware` — expect a noticeably larger rootfs than Debian; the default
-3072 MiB root slots still fit it comfortably.
+### Root slot sizing
+
+Each of the two root slots holds a complete OS, so the slot — not the image — is
+the binding constraint. The builder enforces a per-distro minimum and raises
+`--root-size` if you ask for less:
+
+| Distro | Minimum root slot | Why |
+|--------|-------------------|-----|
+| Debian | 2560 MiB | base system + `linux-image-amd64` + initramfs |
+| Ubuntu | 5120 MiB | `linux-image-generic` **depends on** `linux-firmware` and `linux-modules-extra` (~1.7 GiB installed), which Debian never pulls in |
+
+Ubuntu needs roughly twice Debian's space for the same install. At Debian's
+default of 3072 MiB an Ubuntu build fills the slot partway through initramfs
+generation and dies with a bare `No space left on device` from `cpio` — measured,
+not theoretical. The minimum is now enforced up front, and if the slot fills
+anyway the builder reports the actual usage instead of leaving you to read dpkg
+output.
+
+APT's downloaded `.deb` archives are bind-mounted outside the root slot during
+installation, so Ubuntu's ~460 MiB of package downloads no longer count against
+it.
 
 ## Customization
 

@@ -1,15 +1,15 @@
 #!ipxe
-# Rendered from environment by the HTTP container entrypoint.
-echo
-echo ====================================================
-echo   A/B Network Imager
-echo   Server : ${SERVER_IP}
-echo   Image  : ${IMAGE_FILE}
-echo   Action : ${ACTION} after imaging
-echo ====================================================
-echo Booting the imager... this machine's disk will be re-imaged.
-echo
+# Dispatcher — the script every PXE client is pointed at by DHCP.
+#
+# A machine first asks for a script named after its own MAC. If the web UI has
+# assigned that machine a specific image, that file exists and wins; if not the
+# request 404s, `||` takes over, and the machine gets the default image. That is
+# what lets a switch full of machines image concurrently off one server while
+# still allowing individual machines to be targeted, with no per-machine setup
+# on the machines themselves.
+#
+# ${mac:hexhyp} is expanded by iPXE at boot time (e.g. 00-11-22-33-44-55), not
+# here: envsubst is given an explicit variable list, so it leaves iPXE's own
+# variables untouched.
 
-kernel http://${SERVER_IP}/imager/vmlinuz imager.url=http://${SERVER_IP}/images/${IMAGE_FILE} imager.action=${ACTION} imager.compress=auto console=tty0 console=ttyS0,115200
-initrd http://${SERVER_IP}/imager/initramfs.img
-boot
+chain --autofree http://${SERVER_IP}/hosts/${mac:hexhyp}.ipxe || chain --autofree http://${SERVER_IP}/default.ipxe

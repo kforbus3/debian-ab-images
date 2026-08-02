@@ -51,6 +51,50 @@ Everything a machine needs is served by this stack — the iPXE bootloaders are
 baked into the dnsmasq image, and the imager and disk image come from `output/`
 over HTTP. Targets never need internet access.
 
+## Imaging many machines at once
+
+The intended topology is a second NIC on the server going to a dumb switch, with
+the target machines on that switch and nothing else:
+
+```
+   server ─ eth0 ── your LAN (web UI, internet)
+          └ eth1 ── dumb switch ─┬─ machine 1
+                                 ├─ machine 2
+                                 └─ machine N
+```
+
+Pick `eth1` as the provisioning interface. DHCP and TFTP bind to it alone, so the
+switch is a self-contained imaging network and your LAN never sees the DHCP
+server. Machines image **concurrently** — each gets a lease, pulls the ~100 KB
+iPXE binary over TFTP, then downloads the image over HTTP, which is where the
+bulk of the transfer happens. The practical ceiling is the switch's bandwidth and
+the server's disk, not the software.
+
+The default lease range covers ~100 machines; widen it under **Advanced** if you
+need more.
+
+## Targeting specific machines
+
+By default every machine that boots gets the image chosen under *Image to
+deploy*. To send particular machines a different image, add them under
+**Per-machine images** on the Provisioning page — by MAC, with an optional label
+and its own post-imaging action.
+
+Machines that have already PXE-booted appear in the live monitor with an
+**assign image…** link, so you can plug in the fleet, see what turned up, and
+assign from there instead of collecting MAC addresses by hand.
+
+Mechanically, DHCP points every client at `boot.ipxe`, which chains to
+`/hosts/<mac>.ipxe` and falls back to `/default.ipxe` when no such file exists:
+
+```
+chain --autofree http://SERVER/hosts/${mac:hexhyp}.ipxe || chain --autofree http://SERVER/default.ipxe
+```
+
+The web UI generates those per-host scripts from `output/hosts/assignments.json`
+and regenerates them whenever the server IP or an assignment changes. Nothing is
+configured on the machines themselves.
+
 ## Imaging machines
 
 1. Build the image and imager (`make image`, `make imager`).

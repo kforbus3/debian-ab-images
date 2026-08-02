@@ -18,6 +18,20 @@ async def put_config(cfg: dict = Body(...), _: str = Depends(require_auth)):
     return orch.read_env()
 
 
+@router.get("/assignments")
+async def get_assignments(_: str = Depends(require_auth)):
+    """Per-machine image targeting: MAC -> image."""
+    return await run_in_threadpool(orch.read_assignments)
+
+
+@router.put("/assignments")
+async def put_assignments(items: list = Body(...), _: str = Depends(require_auth)):
+    try:
+        return await run_in_threadpool(orch.write_assignments, items)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.get("/interfaces")
 async def interfaces(_: str = Depends(require_auth)):
     """Host NICs to choose a provisioning network from."""

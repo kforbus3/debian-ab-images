@@ -8,8 +8,11 @@ through the Docker socket.
 ## Features
 
 - **Build wizard** — pick distribution (Debian or Ubuntu), release, hostname,
-  user, sizes, compression, and extra packages, then start a build and watch its
-  **log stream live** in the browser (with cancel).
+  user, sizes, compression, and extra packages, then start a build and watch a
+  **progress bar and live log** in the browser (with cancel). The bar tracks 14
+  named phases reported by the builder, so a long step like debootstrap or
+  compression is identifiable rather than just slow. Navigating away and back
+  reattaches to the running build.
 - **One-click imager build.**
 - **Image library** — list, download, and delete built images, with distro/
   release/encryption metadata and SHA256 for each, and a **Deploy** button that
@@ -21,9 +24,14 @@ through the Docker socket.
   derived from it. DHCP and TFTP are bound to that interface alone, so the
   imaging network is self-contained and the host's other networks never see it.
   A readiness check blocks Start until the imager is built and an image chosen.
+- **Per-machine images** — assign specific machines a specific image by MAC,
+  with an optional label and its own post-imaging action. Everything else on the
+  switch gets the default image. Machines already seen by the monitor have an
+  *assign image…* link, so you can plug in a fleet and target from what shows up
+  rather than collecting MAC addresses first.
 - **Live imaging monitor** — machines that are PXE-booting / being imaged,
   merged from the dnsmasq **and** nginx logs, so a machine shows **imaged** once
-  it has fully downloaded the image.
+  it has fully downloaded the image. Many machines image concurrently.
 - **Disk usage** at a glance on the dashboard.
 
 ## Running it

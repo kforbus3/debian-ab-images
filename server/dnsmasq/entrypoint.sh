@@ -24,6 +24,13 @@ CONF="/etc/dnsmasq.runtime.conf"
     echo "log-dhcp"
     echo "enable-tftp"
     echo "tftp-root=${TFTP_ROOT}"
+    # A whole switch powering on at once all fetch the iPXE binary in the same
+    # few seconds. dnsmasq's default cap is 50 concurrent TFTP transfers; past
+    # that clients fail to boot rather than queueing. Only the ~100 KB
+    # bootloader goes over TFTP — the image itself is HTTP — so raising this is
+    # cheap.
+    echo "tftp-max=${TFTP_MAX:-200}"
+    echo "dhcp-lease-max=${DHCP_LEASE_MAX:-500}"
     # interface + bind-interfaces: bind sockets to this NIC alone rather than
     # the wildcard address, so nothing leaks onto the host's other networks.
     echo "interface=${INTERFACE}"
