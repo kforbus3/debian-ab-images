@@ -180,6 +180,10 @@ esac
 OS_PRETTY="$(tr '[:lower:]' '[:upper:]' <<< "${DISTRO:0:1}")${DISTRO:1}"
 HOSTNAME_="${HOSTNAME_:-${DISTRO}-ab}"
 OUTPUT="${OUTPUT:-/output/${DISTRO}-${SUITE}-ab.img}"
+# A bare filename means "in the output directory". Without this it lands in the
+# builder's working directory instead, which is inside the container: the build
+# reports success, and the image is thrown away with the container.
+case "$OUTPUT" in /*) ;; *) OUTPUT="/output/${OUTPUT}";; esac
 
 # systemd-resolved became a separate package in Debian 12 / Ubuntu 23.10; on
 # older suites it ships inside systemd itself.
@@ -429,11 +433,17 @@ if [ "$ENCRYPT" = true ]; then
 
     NETOPT=""
     [ "$UNLOCK" = tang ] && NETOPT=",_netdev"
+    # `initramfs` on every entry is what actually gets these devices unlocked
+    # early. cryptsetup-initramfs otherwise includes only the device it resolves
+    # as root at build time -- which is slot A, because that is what the builder
+    # is standing in. Without the option, booting slot B cannot unlock its own
+    # root, and the overlay is not opened until well after the switch to root,
+    # far too late to serve as root's upper layer.
     cat > "$MNT/etc/crypttab" <<EOF
 # <name>          <device>                 <keyfile>     <options>
-luks-rootfs-a     UUID=$UUID_A             $KEYREF_A     luks,discard$NETOPT
-luks-rootfs-b     UUID=$UUID_B             $KEYREF_B     luks,discard$NETOPT
-luks-overlay      UUID=$UUID_OVL           $KEYREF_OVL   luks,discard$NETOPT
+luks-rootfs-a     UUID=$UUID_A             $KEYREF_A     luks,discard,initramfs$NETOPT
+luks-rootfs-b     UUID=$UUID_B             $KEYREF_B     luks,discard,initramfs$NETOPT
+luks-overlay      UUID=$UUID_OVL           $KEYREF_OVL   luks,discard,initramfs$NETOPT
 EOF
 fi
 
