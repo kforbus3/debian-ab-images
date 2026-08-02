@@ -151,6 +151,21 @@ else
     die "Imaging failed: no valid GPT on ${TARGET} (download/URL problem?)"
 fi
 
+# The image is smaller than the disk it was just written to, so the GPT that came
+# with it still describes a disk the size of the IMAGE: its backup header sits
+# where the image ended and its last-usable-LBA is far short of the real end.
+# Everything boots fine like that, which is why this is easy to miss — but the
+# free space is invisible to the partition table, so first-boot-expand finds
+# "no free space to grow" and the overlay stays at its minimum size forever.
+# Relocating the backup header to the true end of the disk is what makes the
+# remaining space real.
+if [ -x /usr/sbin/sgdisk ]; then
+    say "Relocating GPT backup header to the end of ${TARGET}…"
+    /usr/sbin/sgdisk -e "$TARGET" >/dev/null 2>&1 \
+        && say "${GRN}Disk now spans its full size.${NC}" \
+        || say "WARNING: could not relocate the GPT backup header"
+fi
+
 # Re-read the partition table so the kernel sees the new layout.
 $BB blockdev --rereadpt "$TARGET" 2>/dev/null || true
 

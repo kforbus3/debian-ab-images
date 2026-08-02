@@ -3,6 +3,13 @@ Description=Grow overlay partition to fill disk on first boot
 DefaultDependencies=no
 After=local-fs.target
 Before=multi-user.target
+# Run before LUKS enrollment. On a tpm2/tang image, luks-enroll binds the
+# volumes to the TPM (or Tang) and then deletes the bootstrap keyfiles and
+# rewrites crypttab to "none". `cryptsetup resize` needs a key, so growing the
+# encrypted overlay has to happen while that keyfile still exists. The ordering
+# already worked out that way by accident — luks-enroll waits on
+# network-online.target — but nothing enforced it.
+Before=luks-enroll.service
 ConditionPathExists=!/var/lib/first-boot-expand.done
 
 [Service]

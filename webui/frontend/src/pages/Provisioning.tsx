@@ -236,10 +236,27 @@ export default function Provisioning() {
             </div>
           </div>
           <p className="mb-3 text-xs text-zinc-500">
-            Machines listed here get the image you choose; every other machine on the
-            switch gets the default image above. Matching is by MAC at boot, so you can
-            plug in a whole switch and still send one box a different build.
+            Machines listed here get the image you choose. Matching is by MAC at boot,
+            so you can plug in a whole switch and still send one box a different build.
           </p>
+          <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+            <Label>Machines with no assignment</Label>
+            <Select value={cfg.UNASSIGNED || "image"} onChange={(e) => set("UNASSIGNED", e.target.value)}>
+              <option value="image">Image them with the default image above</option>
+              <option value="hold">Hold — discover only, do not touch their disks</option>
+            </Select>
+            <p className="mt-2 text-xs text-zinc-500">
+              {cfg.UNASSIGNED === "hold" ? (
+                <>Unknown machines will show their MAC and retry every {cfg.RETRY_SECONDS || 30}s
+                without writing anything. Power on the fleet, let them appear below, assign
+                images, and each machine picks its assignment up on its next retry — no second
+                power cycle. Save the configuration to apply this.</>
+              ) : (
+                <>Any machine that PXE-boots gets imaged immediately, including one you have not
+                assigned yet. Switch to <em>Hold</em> to discover MACs safely first.</>
+              )}
+            </p>
+          </div>
           {assign.length === 0 ? (
             <p className="py-6 text-center text-sm text-zinc-500">
               No per-machine targeting — every machine that boots gets{" "}
