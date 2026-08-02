@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app import orchestrator as orch
@@ -18,6 +18,18 @@ async def put_config(cfg: dict = Body(...), _: str = Depends(require_auth)):
     return orch.read_env()
 
 
+@router.get("/interfaces")
+async def interfaces(_: str = Depends(require_auth)):
+    """Host NICs to choose a provisioning network from."""
+    return await run_in_threadpool(orch.list_interfaces)
+
+
+@router.get("/preflight")
+async def preflight(_: str = Depends(require_auth)):
+    problems = await run_in_threadpool(orch.provisioning_preflight)
+    return {"ready": not problems, "problems": problems}
+
+
 @router.get("/status")
 async def status(_: str = Depends(require_auth)):
     return await run_in_threadpool(orch.server_status)
@@ -25,6 +37,11 @@ async def status(_: str = Depends(require_auth)):
 
 @router.post("/up")
 async def up(_: str = Depends(require_auth)):
+    # Refuse rather than start a server that would leave machines PXE-booting
+    # into nothing — or, worse, serve DHCP without a confining interface.
+    problems = await run_in_threadpool(orch.provisioning_preflight)
+    if problems:
+        raise HTTPException(503, " ".join(problems))
     return {"message": await run_in_threadpool(orch.server_up)}
 
 

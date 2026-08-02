@@ -20,7 +20,10 @@ COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# iproute2: the UI enumerates the host's NICs by running this same image as a
+# throwaway container in the host network namespace (see list_interfaces), so
+# the operator picks a provisioning interface instead of typing one.
+RUN apt-get update && apt-get install -y --no-install-recommends curl iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

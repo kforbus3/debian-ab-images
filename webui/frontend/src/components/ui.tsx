@@ -1,6 +1,6 @@
-import { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from "react";
+import { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, useEffect, useRef } from "react";
 import { clsx } from "clsx";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 
 export function Button({ variant="primary", size="md", loading, className, children, ...p }:
   ButtonHTMLAttributes<HTMLButtonElement> & { variant?:"primary"|"secondary"|"danger"|"ghost"; size?:"sm"|"md"; loading?:boolean }) {
@@ -42,8 +42,30 @@ export function PageHeader({ title, subtitle, actions }: { title:string; subtitl
     {actions && <div className="flex gap-2">{actions}</div>}
   </div>;
 }
+export function Alert({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) return null;
+  return <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+    <p className="flex items-center gap-2 text-sm font-semibold text-amber-300"><AlertTriangle size={15} /> {title}</p>
+    <ul className="mt-2 space-y-1.5 pl-1 text-sm text-amber-100/80">
+      {items.map((t, i) => <li key={i}>{t}</li>)}
+    </ul>
+  </div>;
+}
 export function LogView({ lines }: { lines: string[] }) {
-  return <pre className="max-h-[28rem] overflow-auto rounded-lg border border-zinc-800 bg-black p-3 text-xs leading-relaxed text-zinc-300 whitespace-pre-wrap">
+  const ref = useRef<HTMLPreElement>(null);
+  const pinned = useRef(true);
+  // Follow the tail of a live build, but stop fighting the user the moment they
+  // scroll up to read something — resume only when they return to the bottom.
+  const onScroll = () => {
+    const el = ref.current;
+    if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [lines]);
+  return <pre ref={ref} onScroll={onScroll}
+    className="max-h-[28rem] overflow-auto rounded-lg border border-zinc-800 bg-black p-3 text-xs leading-relaxed text-zinc-300 whitespace-pre-wrap break-all">
     {lines.length ? lines.join("\n") : "Waiting for output…"}
   </pre>;
 }

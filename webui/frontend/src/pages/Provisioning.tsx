@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Play, Square, RefreshCw, Save, Monitor } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
-import { Button, Card, Input, Label, Select, PageHeader, Badge } from "../components/ui";
+import { Button, Card, Input, Label, Select, PageHeader, Badge, Alert } from "../components/ui";
+
+interface Iface { name: string; ip: string; prefixlen: number; network: string; netmask: string; up: boolean; default: boolean; }
 
 export default function Provisioning() {
   const toast = useToast();
@@ -11,12 +13,17 @@ export default function Provisioning() {
   const [busy, setBusy] = useState(false);
   const [clients, setClients] = useState<any[]>([]);
   const [images, setImages] = useState<string[]>([]);
+  const [ifaces, setIfaces] = useState<Iface[]>([]);
+  const [problems, setProblems] = useState<string[]>([]);
+  const [advanced, setAdvanced] = useState(false);
 
   async function loadAll() {
     try {
       const [c, s, im] = await Promise.all([api.get("/server/config"), api.get("/server/status"), api.get("/images")]);
       setCfg(c.data); setRunning(s.data.running); setImages(im.data.images.map((x: any) => x.name));
     } catch (e) { toast.error(apiError(e)); }
+    api.get("/server/interfaces").then((r) => setIfaces(r.data)).catch(() => {});
+    api.get("/server/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
   }
   async function loadClients() { try { setClients((await api.get("/server/clients")).data); } catch {} }
 
@@ -30,10 +37,40 @@ export default function Provisioning() {
 
   const set = (k: string, v: string) => setCfg((c) => ({ ...c, [k]: v }));
 
+  // Choosing the interface is the only network decision the operator has to
+  // make; its address and subnet determine everything else, so derive the rest
+  // rather than asking for numbers they'd have to look up.
+  function selectInterface(name: string) {
+    const i = ifaces.find((f) => f.name === name);
+    if (!i) { set("INTERFACE", name); return; }
+    const size = 2 ** (32 - i.prefixlen);
+    const base = i.network.split(".").map(Number);
+    const at = (off: number) => {
+      const v = ((base[0] << 24) | (base[1] << 16) | (base[2] << 8) | base[3]) + off;
+      return [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255].join(".");
+    };
+    const lo = Math.min(100, Math.floor(size / 4));
+    const hi = Math.min(200, size - 2);
+    setCfg((c) => ({
+      ...c,
+      INTERFACE: i.name,
+      SERVER_IP: i.ip,
+      PROXY_SUBNET: i.network,
+      DHCP_NETMASK: i.netmask,
+      ...(size >= 8 && lo < hi ? { DHCP_RANGE_START: at(lo), DHCP_RANGE_END: at(hi) } : {}),
+    }));
+  }
+
+  const selected = ifaces.find((f) => f.name === cfg.INTERFACE);
+
   async function save() {
     setBusy(true);
-    try { await api.put("/server/config", cfg); toast.success("Configuration saved"); }
-    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+    try {
+      await api.put("/server/config", cfg);
+      toast.success("Configuration saved");
+      const r = await api.get("/server/preflight");
+      setProblems(r.data.problems);
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   }
   async function ctrl(action: "up" | "down") {
     setBusy(true);
@@ -51,27 +88,70 @@ export default function Provisioning() {
             : <Button size="sm" loading={busy} onClick={() => ctrl("up")}><Play size={13} /> Start</Button>}
         </>
       } />
+      <Alert title="Not ready to provision yet" items={problems} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold">Server configuration</h2>
+          <h2 className="mb-1 text-sm font-semibold">Server configuration</h2>
+          <p className="mb-3 text-xs text-zinc-500">
+            Pick the network the machines are on and the image to write. DHCP and TFTP
+            are confined to that interface — no other network sees them.
+          </p>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label>Server IP</Label><Input value={cfg.SERVER_IP || ""} onChange={(e) => set("SERVER_IP", e.target.value)} /></div>
-            <div><Label>Interface</Label><Input value={cfg.INTERFACE || ""} onChange={(e) => set("INTERFACE", e.target.value)} placeholder="eth0" /></div>
+            <div className="col-span-2">
+              <Label>Provisioning network</Label>
+              <Select value={cfg.INTERFACE || ""} onChange={(e) => selectInterface(e.target.value)}>
+                <option value="">— select an interface —</option>
+                {ifaces.map((i) => (
+                  <option key={i.name} value={i.name}>
+                    {i.name} · {i.ip}/{i.prefixlen}{i.default ? " (main LAN — carries the default route)" : ""}
+                  </option>
+                ))}
+              </Select>
+              {ifaces.length === 0 && <p className="mt-1 text-xs text-amber-400">No interfaces detected.</p>}
+              {selected?.default && (
+                <p className="mt-1 text-xs text-amber-400">
+                  This is the host's main LAN. Standalone DHCP here will compete with the
+                  network's existing DHCP server — use a dedicated NIC, or switch to proxy
+                  mode under Advanced.
+                </p>
+              )}
+            </div>
             <div><Label>Image to deploy</Label><Select value={cfg.IMAGE_FILE || ""} onChange={(e) => set("IMAGE_FILE", e.target.value)}>
               <option value="">— select —</option>{images.map((n) => <option key={n} value={n}>{n}</option>)}
             </Select></div>
             <div><Label>After imaging</Label><Select value={cfg.ACTION || "reboot"} onChange={(e) => set("ACTION", e.target.value)}><option value="reboot">reboot</option><option value="poweroff">poweroff</option><option value="shell">shell</option></Select></div>
-            <div><Label>DHCP mode</Label><Select value={cfg.MODE || "proxy"} onChange={(e) => set("MODE", e.target.value)}><option value="proxy">proxy (coexist)</option><option value="dhcp">standalone DHCP</option></Select></div>
-            {cfg.MODE === "dhcp" ? (
-              <>
-                <div><Label>Range start</Label><Input value={cfg.DHCP_RANGE_START || ""} onChange={(e) => set("DHCP_RANGE_START", e.target.value)} /></div>
-                <div><Label>Range end</Label><Input value={cfg.DHCP_RANGE_END || ""} onChange={(e) => set("DHCP_RANGE_END", e.target.value)} /></div>
-                <div><Label>Router</Label><Input value={cfg.DHCP_ROUTER || ""} onChange={(e) => set("DHCP_ROUTER", e.target.value)} /></div>
-              </>
-            ) : (
-              <div><Label>Proxy subnet</Label><Input value={cfg.PROXY_SUBNET || ""} onChange={(e) => set("PROXY_SUBNET", e.target.value)} placeholder="192.168.1.0" /></div>
-            )}
           </div>
+
+          {selected && (
+            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
+              <p className="mb-1 font-medium text-zinc-300">This server will:</p>
+              <p>serve DHCP + TFTP on <span className="text-zinc-200">{selected.name}</span> only, as <span className="text-zinc-200">{cfg.SERVER_IP}</span></p>
+              {cfg.MODE !== "proxy" && cfg.DHCP_RANGE_START && (
+                <p>lease <span className="text-zinc-200">{cfg.DHCP_RANGE_START} – {cfg.DHCP_RANGE_END}</span> to machines that boot</p>
+              )}
+              {cfg.MODE === "proxy" && <p>answer only PXE requests on <span className="text-zinc-200">{cfg.PROXY_SUBNET}</span>, leaving IPs to the existing DHCP server</p>}
+            </div>
+          )}
+
+          <button onClick={() => setAdvanced((a) => !a)} className="mt-4 block text-xs text-zinc-500 hover:text-zinc-300">
+            {advanced ? "Hide" : "Show"} advanced network settings
+          </button>
+          {advanced && (
+            <div className="mt-3 grid grid-cols-2 gap-3 border-t border-zinc-800 pt-3">
+              <div><Label>Server IP</Label><Input value={cfg.SERVER_IP || ""} onChange={(e) => set("SERVER_IP", e.target.value)} /></div>
+              <div><Label>DHCP mode</Label><Select value={cfg.MODE || "dhcp"} onChange={(e) => set("MODE", e.target.value)}><option value="dhcp">standalone (private)</option><option value="proxy">proxy (coexist with LAN DHCP)</option></Select></div>
+              {cfg.MODE === "proxy" ? (
+                <div className="col-span-2"><Label>Proxy subnet</Label><Input value={cfg.PROXY_SUBNET || ""} onChange={(e) => set("PROXY_SUBNET", e.target.value)} /></div>
+              ) : (
+                <>
+                  <div><Label>Range start</Label><Input value={cfg.DHCP_RANGE_START || ""} onChange={(e) => set("DHCP_RANGE_START", e.target.value)} /></div>
+                  <div><Label>Range end</Label><Input value={cfg.DHCP_RANGE_END || ""} onChange={(e) => set("DHCP_RANGE_END", e.target.value)} /></div>
+                  <div><Label>Router (optional)</Label><Input value={cfg.DHCP_ROUTER || ""} onChange={(e) => set("DHCP_ROUTER", e.target.value)} placeholder="none — imaging needs no gateway" /></div>
+                  <div><Label>DNS (optional)</Label><Input value={cfg.DHCP_DNS || ""} onChange={(e) => set("DHCP_DNS", e.target.value)} placeholder="none" /></div>
+                </>
+              )}
+            </div>
+          )}
           <Button className="mt-4" loading={busy} onClick={save}><Save size={14} /> Save configuration</Button>
         </Card>
 

@@ -14,6 +14,13 @@ _ESP_MIB = 128
 _MIN_OVERLAY_MIB = 256
 
 
+def _require_ready() -> None:
+    """Fail a build request up front, with the fix, rather than deep in the log."""
+    problems = orch.preflight()
+    if problems:
+        raise HTTPException(503, " ".join(problems))
+
+
 def _validate_build(opts: dict) -> None:
     size = opts.get("image_size", "auto")
     try:
@@ -38,8 +45,17 @@ def _validate_build(opts: dict) -> None:
             raise HTTPException(400, "unlock=tang requires a Tang URL")
 
 
+@router.get("/preflight")
+async def preflight(_: str = Depends(require_auth)):
+    """Whether the UI can actually drive the builder, and what to fix if not."""
+    problems = orch.preflight()
+    return {"ready": not problems, "problems": problems,
+            "host_project_dir": orch.host_project_dir()}
+
+
 @router.post("/builds")
 async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
+    _require_ready()
     _validate_build(opts)
     if jobs.running(type="image"):
         raise HTTPException(409, "An image build is already running")
@@ -50,6 +66,7 @@ async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
 
 @router.post("/imager/build")
 async def start_imager(_: str = Depends(require_auth)):
+    _require_ready()
     if jobs.running(type="imager"):
         raise HTTPException(409, "An imager build is already running")
     cmd, label = orch.build_imager_cmd()

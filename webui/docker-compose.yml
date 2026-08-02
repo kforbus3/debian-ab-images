@@ -1,8 +1,11 @@
 # Web management UI for Debian A/B Images.
 #
-# HOST_PROJECT_DIR must be the ABSOLUTE host path to this repository, so the UI
-# can run the builder/imager/server containers with correct bind-mount paths
-# through the Docker socket. Set it in webui/.env (see .env.example).
+# Run it from this directory (`cd webui && docker compose up -d --build`) so the
+# `..` bind mount below resolves to the repository root. The UI reads the repo at
+# /project and starts the builder/imager/server as sibling containers through the
+# Docker socket; it discovers the repo's host-side path from its own mount, so no
+# path configuration is needed. HOST_PROJECT_DIR only overrides that discovery —
+# set it in webui/.env if you run compose from somewhere else.
 services:
   webui:
     build: .
@@ -14,8 +17,8 @@ services:
     environment:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in webui/.env}
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in webui/.env (long random string)}
-      - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:?Set HOST_PROJECT_DIR to this repo's absolute host path}
+      - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:-}
       - PROJECT_DIR=/project
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOST_PROJECT_DIR}:/project
+      - ${HOST_PROJECT_DIR:-..}:/project

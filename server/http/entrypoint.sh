@@ -13,6 +13,8 @@ ln -sfn /data/imager /srv/http/imager
 
 export SERVER_IP IMAGE_FILE ACTION
 envsubst '${SERVER_IP} ${IMAGE_FILE} ${ACTION}' < /boot.ipxe.tmpl > /srv/http/boot.ipxe
+# Bind the listener to the provisioning IP rather than every host interface.
+envsubst '${SERVER_IP}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
 
 echo "----- rendered /srv/http/boot.ipxe -----"
 cat /srv/http/boot.ipxe

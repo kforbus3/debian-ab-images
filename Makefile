@@ -42,6 +42,23 @@ image: ## Build the A/B disk image into ./output (SUITE=trixie|bookworm|noble|ja
 imager: ## Build the netboot imager (kernel + initramfs) into ./output/imager
 	./imager/run.sh
 
+.PHONY: webui
+webui: ## Start the web management UI on http://localhost:8080 (needs webui/.env)
+	@test -f webui/.env || { \
+	  echo "webui/.env is missing. Create it with:"; \
+	  echo "  cp webui/.env.example webui/.env"; \
+	  echo "  # then set ADMIN_PASSWORD and SECRET_KEY"; exit 1; }
+	cd webui && docker compose up -d --build
+	@echo "Web UI: http://localhost:8080"
+
+.PHONY: webui-down
+webui-down: ## Stop the web management UI
+	cd webui && docker compose down
+
+.PHONY: webui-logs
+webui-logs: ## Follow web UI logs
+	cd webui && docker compose logs -f
+
 .PHONY: server-up
 server-up: ## Start the PXE/HTTP provisioning server (needs server/.env)
 	cd server && docker compose up -d --build

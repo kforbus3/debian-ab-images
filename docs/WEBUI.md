@@ -16,8 +16,11 @@ through the Docker socket.
   points the provisioning server at an image.
 - **Job history** — past builds and their full logs survive UI restarts
   (persisted under `output/jobs/`).
-- **Provisioning control** — edit the server config (proxyDHCP/DHCP, server IP,
-  image to deploy, post-image action), start/stop the PXE server.
+- **Turnkey provisioning** — the UI lists the host's network interfaces; pick the
+  one facing the machines and the server IP, subnet and DHCP lease range are
+  derived from it. DHCP and TFTP are bound to that interface alone, so the
+  imaging network is self-contained and the host's other networks never see it.
+  A readiness check blocks Start until the imager is built and an image chosen.
 - **Live imaging monitor** — machines that are PXE-booting / being imaged,
   merged from the dnsmasq **and** nginx logs, so a machine shows **imaged** once
   it has fully downloaded the image.
@@ -26,20 +29,24 @@ through the Docker socket.
 ## Running it
 
 ```bash
-cd webui
-cp .env.example .env
-# Edit .env:
-#   ADMIN_PASSWORD   — UI login password
-#   SECRET_KEY       — random string
-#   HOST_PROJECT_DIR — ABSOLUTE host path to this repository
-docker compose up -d --build
+cp webui/.env.example webui/.env
+# Edit it:
+#   ADMIN_PASSWORD — UI login password
+#   SECRET_KEY     — random string
+make webui
 ```
 
 Open **http://localhost:8080** and log in with `ADMIN_PASSWORD`.
 
-> `HOST_PROJECT_DIR` is required: the UI runs sibling containers via the Docker
-> socket, and bind-mount paths must be resolvable by the Docker daemon on the
-> host. Set it to the absolute path of this checkout (e.g. `/opt/debian-ab-images`).
+No path configuration is needed. Compose mounts the repository root at `/project`
+in the UI container, and the UI asks the Docker daemon where that mount came from
+on the host — which is what the builder/imager containers need for their own bind
+mounts. `HOST_PROJECT_DIR` in `webui/.env` only overrides that detection; set it
+if you run `docker compose` from outside the `webui/` directory, and then it must
+be the absolute host path of *this* checkout. A stale value mounts an empty
+directory and builds fail with `unable to prepare context: path
+"/project/builder" not found` — so the Dashboard and Build pages check this on
+load and show what to fix.
 
 ## How it works
 

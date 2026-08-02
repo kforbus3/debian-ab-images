@@ -164,9 +164,8 @@ Everything above (building, image library, server config, live imaging monitor)
 is also available in a browser:
 
 ```bash
-cd webui
-cp .env.example .env    # set ADMIN_PASSWORD, SECRET_KEY, HOST_PROJECT_DIR
-docker compose up -d --build
+cp webui/.env.example webui/.env   # set ADMIN_PASSWORD and SECRET_KEY
+make webui
 ```
 
 Open <http://localhost:8080>, log in as `admin`, and use the **Build** page
@@ -196,7 +195,8 @@ Open <http://localhost:8080>, log in as `admin`, and use the **Build** page
 | "checksum mismatch" during imaging | Stale `.sha256` sidecar — rebuild or re-copy the image and its sidecars together |
 | Imaged machine boots to GRUB but no OS | Image/firmware mismatch is *not* possible (hybrid boot); check the disk actually finished writing (imager log on the console) |
 | Build fails with "Permission denied" on loop devices | The builder container must run `--privileged` (the Make targets already do) |
-| Web UI won't start | `ADMIN_PASSWORD`, `SECRET_KEY`, and `HOST_PROJECT_DIR` must all be set in `webui/.env` |
+| Web UI won't start | `ADMIN_PASSWORD` and `SECRET_KEY` must both be set in `webui/.env` |
+| Build fails: `unable to prepare context: path "/project/builder" not found` | The repo isn't mounted into the UI container. Clear `HOST_PROJECT_DIR` in `webui/.env` (it is auto-detected) and run `make webui` from the repo root. The Build page shows the same diagnosis in a banner. |
 
 Still stuck? Open an issue with the relevant log
 (`output/build.log`, `make server-logs`, or the imager's console output).

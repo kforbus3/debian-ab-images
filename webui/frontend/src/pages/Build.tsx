@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hammer, Cpu, XCircle } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
-import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge } from "../components/ui";
+import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert } from "../components/ui";
 
 const SUITES: Record<string, { value: string; label: string }[]> = {
   debian: [
@@ -28,9 +28,20 @@ export default function Build() {
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [jobId, setJobId] = useState<string>("");
+  const [problems, setProblems] = useState<string[]>([]);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => () => esRef.current?.close(), []);
+  useEffect(() => {
+    api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
+    // Builds run for many minutes, so navigating away or reloading must not lose
+    // the live log — reattach to whatever build is still running. The stream
+    // replays the job's backlog before going live, so nothing is missed.
+    api.get("/jobs").then((r) => {
+      const job = r.data.find((j: any) => j.status === "running" && (j.type === "image" || j.type === "imager"));
+      if (job) stream(job.id);
+    }).catch(() => {});
+  }, []);
 
   async function stream(id: string) {
     setLog([]); setRunning(true); setStatus("running"); setJobId(id);
@@ -72,6 +83,7 @@ export default function Build() {
       <PageHeader title="Build Image" subtitle="Produce a bootable Debian or Ubuntu A/B image" actions={
         <Button variant="secondary" onClick={startImager} disabled={running}><Cpu size={15} /> Build netboot imager</Button>
       } />
+      <Alert title="Builds cannot run yet" items={problems} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">
           <div className="grid grid-cols-2 gap-3">
