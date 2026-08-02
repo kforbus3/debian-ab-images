@@ -28,6 +28,7 @@ neither service is reachable from the host's other networks. Starting without
 | Variable | Mode | Description |
 |----------|------|-------------|
 | `SERVER_IP` | both | This server's IP on the imaging network (required) |
+| `SERVER_PREFIXLEN` | both | Prefix length for `SERVER_IP`. When set, the server assigns that address to `INTERFACE` at startup if absent (runtime only) |
 | `INTERFACE` | both | NIC to serve on — **required**; DHCP/TFTP are confined to it |
 | `IMAGE_FILE` | both | Image filename in `./output` to deploy (e.g. `debian-trixie-ab.img.zst`) |
 | `ACTION` | both | After imaging: `reboot` \| `poweroff` \| `shell` |
@@ -65,10 +66,26 @@ the target machines on that switch and nothing else:
 
 Pick `eth1` as the provisioning interface. DHCP and TFTP bind to it alone, so the
 switch is a self-contained imaging network and your LAN never sees the DHCP
-server. Machines image **concurrently** — each gets a lease, pulls the ~100 KB
-iPXE binary over TFTP, then downloads the image over HTTP, which is where the
-bulk of the transfer happens. The practical ceiling is the switch's bandwidth and
-the server's disk, not the software.
+server.
+
+**The provisioning NIC does not need an IP address beforehand.** It normally
+won't have one — nothing on that segment hands out addresses, because this server
+is what will. Such a NIC is listed as *no IP address* (and sorted first, since on
+a turnkey setup it is the one you want). Selecting it fills in a free subnet —
+`192.168.50.0/24` unless that collides with something the host already has — and
+the provisioning server assigns the address to the NIC and brings the link up
+when it starts.
+
+That assignment is made at **runtime only**: a reboot reverts it and starting the
+server re-applies it, so the host's permanent network configuration is never
+touched. If you would rather set it yourself, configure the NIC on the host and
+it will appear with its address already in place; the server leaves an existing
+address alone.
+
+Machines image **concurrently** — each gets a lease, pulls the ~100 KB iPXE
+binary over TFTP, then downloads the image over HTTP, which is where the bulk of
+the transfer happens. The practical ceiling is the switch's bandwidth and the
+server's disk, not the software.
 
 The default lease range covers ~100 machines; widen it under **Advanced** if you
 need more.
@@ -108,8 +125,9 @@ configured on the machines themselves.
 
 ### Imager command-line options
 
-The imager reads these from the kernel command line (set in `boot.ipxe`, rendered
-from `.env`). To customize, edit `server/http/boot.ipxe.tmpl`:
+The imager reads these from the kernel command line. `boot.ipxe` only dispatches
+on MAC; the kernel line lives in `server/http/default.ipxe.tmpl` (the fallback)
+and in the per-machine scripts the web UI generates under `output/hosts/`:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
@@ -145,5 +163,6 @@ provisioning server is running.
 ## Updating the served image
 
 Rebuild (`make image`), drop the new file in `./output`, update `IMAGE_FILE` in
-`.env`, and `docker compose up -d` to re-render `boot.ipxe`. No rebuild of the
+`.env`, and `docker compose up -d` to re-render `default.ipxe`. (Setting it from
+the web UI does this for you, and also regenerates any per-machine scripts.) No rebuild of the
 containers is required for a new image — only when `IMAGE_FILE` changes.

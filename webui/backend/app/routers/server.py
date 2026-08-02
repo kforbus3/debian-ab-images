@@ -34,8 +34,11 @@ async def put_assignments(items: list = Body(...), _: str = Depends(require_auth
 
 @router.get("/interfaces")
 async def interfaces(_: str = Depends(require_auth)):
-    """Host NICs to choose a provisioning network from."""
-    return await run_in_threadpool(orch.list_interfaces)
+    """Host NICs to choose a provisioning network from, plus a proposed static
+    address for one that has none (the usual case for a dedicated NIC)."""
+    ifaces = await run_in_threadpool(orch.list_interfaces)
+    suggestion = await run_in_threadpool(orch.suggest_provisioning_net, ifaces)
+    return {"interfaces": ifaces, "suggestion": suggestion}
 
 
 @router.get("/preflight")

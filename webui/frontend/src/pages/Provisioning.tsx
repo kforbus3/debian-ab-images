@@ -5,7 +5,8 @@ import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Alert } from "../components/ui";
 
 interface Assignment { mac: string; image: string; action: string; name: string; }
-interface Iface { name: string; ip: string; prefixlen: number; network: string; netmask: string; up: boolean; default: boolean; }
+interface Iface { name: string; ip: string; prefixlen: number; network: string; netmask: string; mac: string; up: boolean; carrier: boolean; default: boolean; }
+interface Suggestion { SERVER_IP?: string; prefixlen?: number; DHCP_NETMASK?: string; PROXY_SUBNET?: string; DHCP_RANGE_START?: string; DHCP_RANGE_END?: string; }
 
 export default function Provisioning() {
   const toast = useToast();
@@ -18,13 +19,14 @@ export default function Provisioning() {
   const [problems, setProblems] = useState<string[]>([]);
   const [advanced, setAdvanced] = useState(false);
   const [assign, setAssign] = useState<Assignment[]>([]);
+  const [suggest, setSuggest] = useState<Suggestion>({});
 
   async function loadAll() {
     try {
       const [c, s, im] = await Promise.all([api.get("/server/config"), api.get("/server/status"), api.get("/images")]);
       setCfg(c.data); setRunning(s.data.running); setImages(im.data.images.map((x: any) => x.name));
     } catch (e) { toast.error(apiError(e)); }
-    api.get("/server/interfaces").then((r) => setIfaces(r.data)).catch(() => {});
+    api.get("/server/interfaces").then((r) => { setIfaces(r.data.interfaces); setSuggest(r.data.suggestion || {}); }).catch(() => {});
     api.get("/server/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
     loadAssignments();
   }
@@ -61,6 +63,21 @@ export default function Provisioning() {
   function selectInterface(name: string) {
     const i = ifaces.find((f) => f.name === name);
     if (!i) { set("INTERFACE", name); return; }
+    // A NIC with no IPv4 is the normal case for a dedicated provisioning port:
+    // nothing on that segment hands out addresses, because this server is what
+    // will. Propose a free subnet; the server assigns it to the NIC on start.
+    if (!i.ip) {
+      setCfg((c) => ({
+        ...c, INTERFACE: i.name,
+        SERVER_IP: suggest.SERVER_IP || "",
+        SERVER_PREFIXLEN: String(suggest.prefixlen || 24),
+        DHCP_NETMASK: suggest.DHCP_NETMASK || "",
+        PROXY_SUBNET: suggest.PROXY_SUBNET || "",
+        DHCP_RANGE_START: suggest.DHCP_RANGE_START || "",
+        DHCP_RANGE_END: suggest.DHCP_RANGE_END || "",
+      }));
+      return;
+    }
     const size = 2 ** (32 - i.prefixlen);
     const base = i.network.split(".").map(Number);
     const at = (off: number) => {
@@ -73,6 +90,7 @@ export default function Provisioning() {
       ...c,
       INTERFACE: i.name,
       SERVER_IP: i.ip,
+      SERVER_PREFIXLEN: String(i.prefixlen),
       PROXY_SUBNET: i.network,
       DHCP_NETMASK: i.netmask,
       ...(size >= 8 && lo < hi ? { DHCP_RANGE_START: at(lo), DHCP_RANGE_END: at(hi) } : {}),
@@ -121,7 +139,7 @@ export default function Provisioning() {
                 <option value="">— select an interface —</option>
                 {ifaces.map((i) => (
                   <option key={i.name} value={i.name}>
-                    {i.name} · {i.ip}/{i.prefixlen}{i.default ? " (main LAN — carries the default route)" : ""}
+                    {i.name} · {i.ip ? `${i.ip}/${i.prefixlen}` : "no IP address"}{i.default ? " (main LAN — carries the default route)" : ""}{!i.up ? " — link down" : ""}
                   </option>
                 ))}
               </Select>
@@ -143,6 +161,12 @@ export default function Provisioning() {
           {selected && (
             <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
               <p className="mb-1 font-medium text-zinc-300">This server will:</p>
+              {!selected.ip && cfg.SERVER_IP && (
+                <p>give <span className="text-zinc-200">{selected.name}</span> the address{" "}
+                  <span className="text-zinc-200">{cfg.SERVER_IP}/{cfg.SERVER_PREFIXLEN || 24}</span>{" "}
+                  when it starts — the NIC has none, and this is applied at runtime only
+                  (a reboot reverts it; starting again re-applies it)</p>
+              )}
               <p>serve DHCP + TFTP on <span className="text-zinc-200">{selected.name}</span> only, as <span className="text-zinc-200">{cfg.SERVER_IP}</span></p>
               {cfg.MODE !== "proxy" && cfg.DHCP_RANGE_START && (
                 <p>lease <span className="text-zinc-200">{cfg.DHCP_RANGE_START} – {cfg.DHCP_RANGE_END}</span> to machines that boot</p>
