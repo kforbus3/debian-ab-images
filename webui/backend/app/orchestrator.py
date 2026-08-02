@@ -627,15 +627,26 @@ def server_down() -> str:
     return (_compose("down").stderr or "stopped").strip()
 
 
-def _docker_logs(container: str, tail: int) -> list[str]:
+def _docker_logs(container: str, tail: int, since: str = "") -> list[str]:
+    cmd = ["docker", "logs", "--tail", str(tail)]
+    if since:
+        cmd += ["--since", since]
+    cmd.append(container)
     try:
-        proc = subprocess.run(
-            ["docker", "logs", "--tail", str(tail), container],
-            capture_output=True, text=True, timeout=15,
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except Exception:
         return []
     return (proc.stdout + proc.stderr).splitlines()
+
+
+# How far back to look for machines on the provisioning network. A machine that
+# has not been heard from within this window has finished, been powered off, or
+# rebooted into the image it just received -- in every case it is no longer
+# imaging, and leaving it on screen turns the list into a boot history that only
+# ever grows. Deriving this from the log window rather than a timestamp in the
+# line is deliberate: dnsmasq's own prefix carries no year, so anything parsed
+# out of it breaks across a new year and around a restart.
+CLIENT_WINDOW = "15m"
 
 
 # nginx access-log line: IP ... "GET /path HTTP/1.1" status bytes
@@ -643,10 +654,18 @@ _NGINX_RE = re.compile(r'^(\S+) \S+ \S+ \[[^\]]*\] "GET (/\S*) HTTP/[^"]*" (\d{3
 
 
 def server_clients() -> list[dict]:
-    """Merge dnsmasq (PXE/DHCP/TFTP) and nginx (imager + image downloads) logs
-    into per-machine imaging status."""
+    """Machines active on the provisioning network right now.
+
+    Merges dnsmasq (PXE/DHCP/TFTP) and nginx (imager + image downloads) logs.
+    Only the last CLIENT_WINDOW is considered, and a machine that has finished
+    downloading its image is dropped: it is about to reboot into that image and
+    is no longer a machine waiting to be provisioned. Live progress for a
+    machine mid-write belongs to the imaging registry, which the machine itself
+    reports into -- this list answers the narrower question of who is on the
+    network and needs an image assigned.
+    """
     seen: dict[str, dict] = {}
-    for line in _docker_logs("debian-ab-dnsmasq", 400):
+    for line in _docker_logs("debian-ab-dnsmasq", 400, since=CLIENT_WINDOW):
         mac = re.search(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", line)
         if not mac:
             continue
@@ -667,7 +686,7 @@ def server_clients() -> list[dict]:
     # 200 for the image file means the machine has fully downloaded (and
     # therefore written) the image.
     by_ip: dict[str, str] = {}
-    for line in _docker_logs("debian-ab-http", 300):
+    for line in _docker_logs("debian-ab-http", 300, since=CLIENT_WINDOW):
         m = _NGINX_RE.match(line)
         if not m:
             continue
@@ -684,4 +703,4 @@ def server_clients() -> list[dict]:
     # HTTP clients dnsmasq never saw (e.g. proxyDHCP handled by the router).
     for ip, event in by_ip.items():
         seen[ip] = {"mac": "—", "ip": ip, "event": event, "last": ""}
-    return list(seen.values())
+    return [e for e in seen.values() if e["event"] != "imaged"]

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Play, Square, RefreshCw, Save, Monitor, Plus, Trash2 } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
@@ -198,12 +199,17 @@ export default function Provisioning() {
         </Card>
 
         <Card className="p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold flex items-center gap-2"><Monitor size={15} /> Machines imaging now</h2>
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Monitor size={15} /> On the network now</h2>
             <Button variant="secondary" size="sm" onClick={loadClients}><RefreshCw size={13} /></Button>
           </div>
+          <p className="mb-3 text-xs text-zinc-500">
+            Machines that have booted here in the last 15 minutes and still need an image.
+            One that has finished downloading drops off — watch it write on the{" "}
+            <Link to="/imaging" className="text-brand-400 hover:text-brand-300">Imaging</Link> page.
+          </p>
           {clients.length === 0 ? (
-            <p className="py-10 text-center text-sm text-zinc-500">{running ? "No machines have PXE-booted yet." : "Start the server to monitor machines."}</p>
+            <p className="py-10 text-center text-sm text-zinc-500">{running ? "No machines have PXE-booted recently." : "Start the server to monitor machines."}</p>
           ) : (
             <table className="w-full text-left text-sm">
               <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500"><th className="px-3 py-2">MAC</th><th className="px-3 py-2">IP</th><th className="px-3 py-2">Status</th><th /></tr></thead>

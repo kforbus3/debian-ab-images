@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { HardDrive, Cpu, Network, Hammer, Database } from "lucide-react";
+import { HardDrive, Cpu, Network, Hammer, Database, MonitorSmartphone } from "lucide-react";
 import { api, fmtBytes } from "../lib/api";
 import { Card, PageHeader, Badge, Alert } from "../components/ui";
 
@@ -10,12 +10,20 @@ export default function Dashboard() {
   const [server, setServer] = useState<{ running: boolean } | null>(null);
   const [disk, setDisk] = useState<{ artifacts: number; free: number } | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
+  const [imaging, setImaging] = useState(0);
 
   useEffect(() => {
     api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
     api.get("/images").then((r) => { setImages(r.data.images); setImagerReady(r.data.imager_ready); }).catch(() => {});
     api.get("/server/status").then((r) => setServer(r.data)).catch(() => setServer({ running: false }));
     api.get("/images/disk").then((r) => setDisk(r.data)).catch(() => {});
+
+    // The count of machines imaging right now is the one number on this page
+    // that changes on its own, so it is the only one worth polling.
+    const poll = () => api.get("/imaging").then((r) => setImaging(r.data.active)).catch(() => {});
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => clearInterval(t);
   }, []);
 
   return (
@@ -42,9 +50,10 @@ export default function Dashboard() {
           <p className="mt-2 text-sm text-zinc-400">Artifacts on disk{disk && <span className="text-zinc-500"> · {fmtBytes(disk.free)} free</span>}</p>
         </Card>
       </div>
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Link to="/build"><Card className="flex items-center gap-3 p-5 hover:border-brand-500/50"><Hammer className="text-brand-400" /><div><p className="font-medium">Build a new image</p><p className="text-xs text-zinc-500">Configure and watch the build live</p></div></Card></Link>
-        <Link to="/provisioning"><Card className="flex items-center gap-3 p-5 hover:border-brand-500/50"><Network className="text-emerald-400" /><div><p className="font-medium">Provision machines</p><p className="text-xs text-zinc-500">Start the PXE server and monitor imaging</p></div></Card></Link>
+      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <Link to="/build"><Card className="flex h-full items-center gap-3 p-5 hover:border-brand-500/50"><Hammer className="shrink-0 text-brand-400" /><div><p className="font-medium">Build a new image</p><p className="text-xs text-zinc-500">Configure and watch the build live</p></div></Card></Link>
+        <Link to="/provisioning"><Card className="flex h-full items-center gap-3 p-5 hover:border-brand-500/50"><Network className="shrink-0 text-emerald-400" /><div><p className="font-medium">Provision machines</p><p className="text-xs text-zinc-500">Start the PXE server and hand out images</p></div></Card></Link>
+        <Link to="/imaging"><Card className="flex h-full items-center gap-3 p-5 hover:border-brand-500/50"><MonitorSmartphone className="shrink-0 text-sky-400" /><div><p className="font-medium">Imaging now</p><p className="text-xs text-zinc-500">{imaging > 0 ? `${imaging} machine${imaging === 1 ? "" : "s"} writing an image` : "No machines are imaging"}</p></div>{imaging > 0 && <Badge color="blue">{imaging}</Badge>}</Card></Link>
       </div>
     </div>
   );

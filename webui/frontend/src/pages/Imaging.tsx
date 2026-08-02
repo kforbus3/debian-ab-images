@@ -28,57 +28,52 @@ const PHASE_LABEL: Record<string, string> = {
   failed: "Failed",
 };
 
+// One place to decide what a state looks like, so the icon, the badge and the
+// progress bar can never disagree about whether a machine is in trouble.
+const STATE_STYLE: Record<Machine["state"], { badge: string; bar: string; icon: JSX.Element }> = {
+  active:  { badge: "blue",  bar: "bg-brand-500",   icon: <Loader2 size={16} className="animate-spin text-brand-400" /> },
+  stalled: { badge: "amber", bar: "bg-amber-500",   icon: <AlertTriangle size={16} className="text-amber-400" /> },
+  done:    { badge: "green", bar: "bg-emerald-500", icon: <CheckCircle2 size={16} className="text-emerald-400" /> },
+  failed:  { badge: "red",   bar: "bg-red-500",     icon: <XCircle size={16} className="text-red-400" /> },
+};
+
 function elapsed(sec: number) {
   if (sec < 60) return `${Math.round(sec)}s`;
   const m = Math.floor(sec / 60);
   return m < 60 ? `${m}m ${Math.round(sec % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-function StateIcon({ state }: { state: Machine["state"] }) {
-  if (state === "done") return <CheckCircle2 className="h-5 w-5 text-emerald-500" />;
-  if (state === "failed") return <XCircle className="h-5 w-5 text-red-500" />;
-  if (state === "stalled") return <AlertTriangle className="h-5 w-5 text-amber-500" />;
-  return <Loader2 className="h-5 w-5 animate-spin text-sky-500" />;
-}
-
 function MachineRow({ m, onForget }: { m: Machine; onForget: (id: string) => void }) {
-  const bar =
-    m.state === "failed" ? "bg-red-500"
-    : m.state === "done" ? "bg-emerald-500"
-    : m.state === "stalled" ? "bg-amber-500"
-    : "bg-sky-500";
+  const st = STATE_STYLE[m.state];
 
   return (
-    <div className="border-b border-zinc-200 py-4 last:border-0 dark:border-zinc-800">
+    <div className="border-b border-zinc-800 px-5 py-4 last:border-0">
       <div className="flex items-start gap-3">
-        <div className="pt-0.5"><StateIcon state={m.state} /></div>
+        <div className="pt-0.5">{st.icon}</div>
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-mono text-sm font-medium">{m.id}</span>
+            <span className="font-mono text-sm font-medium text-zinc-100">{m.id}</span>
             {m.address && <span className="text-xs text-zinc-500">{m.address}</span>}
-            <Badge color={m.state === "failed" ? "red" : m.state === "done" ? "emerald"
-                        : m.state === "stalled" ? "amber" : "sky"}>
-              {PHASE_LABEL[m.phase] ?? m.phase}
-            </Badge>
-            <span className="ml-auto text-xs tabular-nums text-zinc-500">{elapsed(m.age)}</span>
+            <Badge color={st.badge}>{PHASE_LABEL[m.phase] ?? m.phase}</Badge>
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-zinc-500">{elapsed(m.age)}</span>
           </div>
 
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-            <div className={`h-full rounded-full transition-all duration-500 ${bar}`}
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+            <div className={`h-full rounded-full transition-all duration-500 ${st.bar}`}
                  style={{ width: `${m.percent}%` }} />
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
-            <span className="tabular-nums">{m.percent}%</span>
+            <span className="tabular-nums text-zinc-400">{m.percent}%</span>
             {m.disk && <span className="inline-flex items-center gap-1">
-              <HardDrive className="h-3 w-3" />{m.disk}</span>}
-            {m.detail && <span>{m.detail}</span>}
+              <HardDrive size={12} />{m.disk}</span>}
+            {m.detail && <span className="truncate">{m.detail}</span>}
             {m.image && <span className="truncate">{m.image.split("/").pop()}</span>}
             {/* A machine that has stopped reporting is called out, because the
                 bar alone would look like slow progress rather than silence. */}
             {m.state === "stalled" &&
-              <span className="text-amber-600">no report for {elapsed(m.stale_for)}</span>}
+              <span className="text-amber-400">no report for {elapsed(m.stale_for)}</span>}
           </div>
         </div>
 
@@ -87,6 +82,19 @@ function MachineRow({ m, onForget }: { m: Machine; onForget: (id: string) => voi
         )}
       </div>
     </div>
+  );
+}
+
+function Section({ title, count, children }:
+    { title: string; count?: number; children: React.ReactNode }) {
+  return (
+    <Card>
+      <div className="flex items-center gap-2 border-b border-zinc-800 px-5 py-3">
+        <h2 className="text-sm font-semibold text-zinc-200">{title}</h2>
+        {count !== undefined && count > 0 && <Badge color="brand">{count}</Badge>}
+      </div>
+      {children}
+    </Card>
   );
 }
 
@@ -126,54 +134,45 @@ export default function Imaging() {
   const finished = (machines ?? []).filter((m) => m.state === "done" || m.state === "failed");
 
   return (
-    <div className="space-y-6">
+    <div>
       <PageHeader
         title="Imaging"
-        subtitle="Machines writing an image right now. Each disappears once it finishes or stops reporting."
+        subtitle="Machines writing an image right now"
       />
 
-      {error && <Card><div className="p-4 text-sm text-red-600">{error}</div></Card>}
+      {error && <Card className="mb-6 border-red-500/40 bg-red-500/10">
+        <p className="p-4 text-sm text-red-300">{error}</p>
+      </Card>}
+
       {machines === null && <Spinner />}
 
       {machines !== null && (
-        <Card>
-          <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-            <h2 className="text-sm font-semibold">
-              In progress {active.length > 0 && (
-                <span className="ml-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700
-                                 dark:bg-sky-950 dark:text-sky-300">{active.length}</span>
-              )}
-            </h2>
-          </div>
-          <div className="px-5">
+        <div className="space-y-4">
+          <Section title="In progress" count={active.length}>
             {active.length === 0 ? (
-              <div className="py-12 text-center">
-                <HardDrive className="mx-auto h-8 w-8 text-zinc-300 dark:text-zinc-700" />
-                <p className="mt-3 text-sm text-zinc-500">No machines are imaging.</p>
-                <p className="mt-1 text-xs text-zinc-400">
+              <div className="py-14 text-center">
+                <HardDrive className="mx-auto text-zinc-700" size={30} />
+                <p className="mt-3 text-sm text-zinc-400">No machines are imaging.</p>
+                <p className="mt-1 text-xs text-zinc-500">
                   Boot a machine from the provisioning network and it will appear here.
                 </p>
               </div>
             ) : active.map((m) => <MachineRow key={m.id} m={m} onForget={forget} />)}
-          </div>
-        </Card>
-      )}
+          </Section>
 
-      {finished.length > 0 && (
-        <Card>
-          <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-            <h2 className="text-sm font-semibold">Just finished</h2>
-          </div>
-          <div className="px-5">
-            {finished.map((m) => <MachineRow key={m.id} m={m} onForget={forget} />)}
-          </div>
-        </Card>
-      )}
+          {finished.length > 0 && (
+            <Section title="Just finished">
+              {finished.map((m) => <MachineRow key={m.id} m={m} onForget={forget} />)}
+            </Section>
+          )}
 
-      <p className="text-xs text-zinc-400">
-        Machines report as they work. One that finishes drops off shortly after; one that stops
-        reporting is marked stalled and then removed, so this page only ever shows current work.
-      </p>
+          <p className="text-xs text-zinc-600">
+            Machines report as they work. One that finishes drops off shortly after; one that
+            stops reporting is marked stalled and then removed, so this page only ever shows
+            current work.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
