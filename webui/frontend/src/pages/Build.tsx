@@ -19,7 +19,8 @@ const SUITES: Record<string, { value: string; label: string }[]> = {
 export default function Build() {
   const toast = useToast();
   const [opts, setOpts] = useState({
-    distro: "debian", suite: "trixie", hostname: "debian-ab", username: "admin", password: "",
+    distro: "debian", suite: "trixie", arch: "amd64",
+    hostname: "debian-ab", username: "admin", password: "",
     image_size: 0, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
@@ -99,6 +100,13 @@ export default function Build() {
           <div className="grid grid-cols-2 gap-3">
             <div><Label>Distribution</Label><Select value={opts.distro} onChange={(e) => setDistro(e.target.value)}><option value="debian">Debian</option><option value="ubuntu">Ubuntu</option></Select></div>
             <div><Label>Release</Label><Select value={opts.suite} onChange={(e) => set("suite", e.target.value)}>{SUITES[opts.distro].map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}</Select></div>
+            <div>
+              <Label>Architecture</Label>
+              <Select value={opts.arch} onChange={(e) => set("arch", e.target.value)}>
+                <option value="amd64">x86_64 (amd64)</option>
+                <option value="arm64">ARM64 (aarch64)</option>
+              </Select>
+            </div>
             <div><Label>Compression</Label><Select value={opts.compress} onChange={(e) => set("compress", e.target.value)}><option value="zstd">zstd</option><option value="gzip">gzip</option><option value="none">none</option></Select></div>
             <div><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
             <div><Label>Username</Label><Input value={opts.username} onChange={(e) => set("username", e.target.value)} /></div>

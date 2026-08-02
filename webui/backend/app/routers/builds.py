@@ -19,6 +19,11 @@ _MIN_OVERLAY_MIB = 256
 # builder raises the slot to this floor, so validate against the same number.
 _MIN_ROOT_MIB = {"ubuntu": 5120, "debian": 2560}
 
+# Architectures the builder can produce a bootable image for. amd64 keeps the
+# hybrid BIOS+UEFI boot; arm64 is UEFI-only. Anything else would build and then
+# fail to boot, so it is rejected here rather than discovered on the bench.
+_ARCHES = ("amd64", "arm64")
+
 
 def _require_ready() -> None:
     """Fail a build request up front, with the fix, rather than deep in the log."""
@@ -28,6 +33,9 @@ def _require_ready() -> None:
 
 
 def _validate_build(opts: dict) -> None:
+    arch = opts.get("arch", "amd64")
+    if arch not in _ARCHES:
+        raise HTTPException(400, f"arch must be one of {', '.join(_ARCHES)}")
     size = opts.get("image_size", "auto")
     try:
         # 0 / "auto" = smallest possible; the image expands on first boot.

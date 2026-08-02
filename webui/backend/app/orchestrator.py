@@ -263,6 +263,11 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     """
     distro = opts.get("distro", "debian")
     suite = opts.get("suite", "trixie")
+    # The builder container runs as the architecture it is building, so
+    # debootstrap and every chroot step execute natively rather than under
+    # emulation.
+    arch = opts.get("arch", "amd64")
+    platform = f"linux/{arch}"
     args = [
         "--distro", distro,
         "--suite", suite,
@@ -272,6 +277,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
                          else str(opts["image_size"])),
         "--root-size", str(opts.get("root_size", 3072)),
         "--compress", opts.get("compress", "zstd"),
+        "--arch", arch,
     ]
     env = {"PASSWORD": opts.get("password", "debian")}
     if opts.get("packages"):
@@ -285,17 +291,19 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         env["LUKS_PASS"] = opts.get("luks_passphrase", "")
         if opts.get("unlock") == "tang" and opts.get("tang_url"):
             args += ["--tang-url", opts["tang_url"]]
-    out_name = f"{distro}-{suite}-ab.img"
+    # The image name carries the architecture, so an amd64 and an arm64 build of
+    # the same suite do not overwrite one another in /output.
+    out_name = f"{distro}-{suite}-{arch}-ab.img"
     # `-e VAR` (no value) makes the docker CLI forward VAR from its own env.
     script = (
-        _docker_build("builder", "debian-ab-builder")
+        _docker_build("builder", f"debian-ab-builder:{arch}", platform)
         + "echo '--- starting image build ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
-        + f"--privileged --platform=linux/amd64 -v {_q(host_output_dir())}:/output "
+        + f"--privileged --platform={platform} -v {_q(host_output_dir())}:/output "
         + "-e PASSWORD -e LUKS_PASS "
-        + f"debian-ab-builder {' '.join(_q(a) for a in args)} --output /output/{out_name}\n"
+        + f"debian-ab-builder:{arch} {' '.join(_q(a) for a in args)} --output /output/{out_name}\n"
     )
-    label = f"Build {distro}/{suite} image ({opts.get('hostname', f'{distro}-ab')})"
+    label = f"Build {distro}/{suite} {arch} image ({opts.get('hostname', f'{distro}-ab')})"
     return ["bash", "-c", script], label, env
 
 
@@ -309,7 +317,7 @@ def build_imager_cmd() -> tuple[list[str], str]:
     return ["bash", "-c", script], "Build netboot imager"
 
 
-def _docker_build(subdir: str, tag: str) -> str:
+def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64") -> str:
     """Shell prelude that builds one of the repo's images.
 
     The build CONTEXT is a path inside this container (the docker CLI tars it up
@@ -321,7 +329,7 @@ def _docker_build(subdir: str, tag: str) -> str:
     return (
         "set -eo pipefail\n"
         f"echo '--- building {subdir} image ---'\n"
-        f"docker build --progress=plain --platform=linux/amd64 -t {tag} {_q(PROJ + '/' + subdir)}\n"
+        f"docker build --progress=plain --platform={platform} -t {tag} {_q(PROJ + '/' + subdir)}\n"
     )
 
 

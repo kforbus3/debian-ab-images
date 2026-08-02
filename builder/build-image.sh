@@ -113,6 +113,38 @@ if [ -z "$DISTRO" ]; then
         *) DISTRO=debian;;
     esac
 fi
+# Everything that differs between architectures is decided here rather than
+# scattered through the build. amd64 keeps the hybrid BIOS+UEFI boot the fleet
+# relies on; arm64 has no BIOS to fall back to and is UEFI-only, with its own
+# GRUB target and fallback binary name.
+case "$ARCH" in
+    amd64)
+        GRUB_PKGS="grub-pc grub-pc-bin grub-efi-amd64-bin"
+        GRUB_EFI_TARGET="x86_64-efi"
+        GRUB_BIOS=1
+        QEMU_ARCH="x86_64"
+        ;;
+    arm64)
+        GRUB_PKGS="grub-efi-arm64 grub-efi-arm64-bin"
+        GRUB_EFI_TARGET="arm64-efi"
+        GRUB_BIOS=0
+        QEMU_ARCH="aarch64"
+        ;;
+    *) die "--arch must be amd64 or arm64 (got '$ARCH')";;
+esac
+
+# Cross-building needs the target architecture's interpreter registered with
+# binfmt_misc on the host; the builder image ships the static qemu binaries but
+# cannot register them itself. Checked here so the failure is one clear line
+# rather than "Exec format error" a thousand lines into debootstrap.
+if [ "$ARCH" != "$(dpkg --print-architecture)" ]; then
+    if [ ! -e "/proc/sys/fs/binfmt_misc/qemu-${QEMU_ARCH}" ]; then
+        die "building $ARCH on $(dpkg --print-architecture) needs binfmt support.
+    Run once on the host:  docker run --privileged --rm tonistiigi/binfmt --install all"
+    fi
+    log "Cross-building $ARCH via qemu-${QEMU_ARCH} (binfmt registered)"
+fi
+
 case "$DISTRO" in
     debian)
         MIRROR="${MIRROR:-http://deb.debian.org/debian}"
@@ -419,7 +451,7 @@ apt-get update
 # initramfs-tools is explicit: Debian kernels depend on it, Ubuntu kernels only
 # recommend it, and without it no initrd.img is generated for GRUB to load.
 apt-get install -y --no-install-recommends \
-    ${KERNEL_PKG} initramfs-tools grub-pc grub-pc-bin grub-efi-amd64-bin \
+    ${KERNEL_PKG} initramfs-tools ${GRUB_PKGS} \
     openssh-server sudo ca-certificates \
     ${RESOLVED_PKG} cloud-guest-utils gdisk parted e2fsprogs \
     rauc ${CRYPT_PACKAGES} ${EXTRA_PACKAGES}

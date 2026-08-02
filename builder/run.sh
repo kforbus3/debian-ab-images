@@ -7,16 +7,33 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUTPUT_DIR:-$HERE/../output}"
+
+# The builder container runs as the architecture it is building. debootstrap and
+# every chroot step then execute natively -- on an arm64 host that makes an arm64
+# build as fast as an amd64 one, and on an amd64 host Docker's binfmt handles the
+# emulation without build-image.sh needing to know.
+ARCH=amd64
+prev=""
+for a in "$@"; do
+    [ "$prev" = "--arch" ] && ARCH="$a"
+    prev="$a"
+done
+case "$ARCH" in
+    amd64|arm64) ;;
+    *) echo "[run] unsupported --arch '$ARCH' (expected amd64 or arm64)" >&2; exit 2;;
+esac
+PLATFORM="linux/${ARCH}"
+echo "[run] target architecture: $ARCH (builder platform $PLATFORM)"
 mkdir -p "$OUT"
 
 echo "[run] building builder image…"
-docker build --platform=linux/amd64 -t debian-ab-builder "$HERE"
+docker build --platform="$PLATFORM" -t "debian-ab-builder:${ARCH}" "$HERE"
 
 echo "[run] building A/B image into $OUT …"
 docker run --rm --privileged \
-    --platform=linux/amd64 \
+    --platform="$PLATFORM" \
     -v "$OUT":/output \
-    debian-ab-builder "$@"
+    "debian-ab-builder:${ARCH}" "$@"
 
 echo "[run] artifacts:"
 ls -lh "$OUT"
