@@ -37,6 +37,9 @@ copy_with_libs() {
     done
 }
 copy_with_libs "$(command -v zstd)" usr/bin
+# sgdisk relocates the GPT backup header after the image lands on a disk that is
+# bigger than the image (see init). busybox has nothing that can do this.
+copy_with_libs "$(command -v sgdisk)" usr/sbin
 # The dynamic loader itself.
 for ldso in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 /lib/ld-linux.so.2; do
     [ -f "$ldso" ] && { mkdir -p "$ROOT$(dirname "$ldso")"; cp -L "$ldso" "$ROOT$ldso"; }

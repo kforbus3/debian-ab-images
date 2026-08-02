@@ -398,6 +398,7 @@ ENV_EXAMPLE = os.path.join(settings.project_dir, "server", ".env.example")
 ENV_KEYS = [
     "SERVER_IP", "SERVER_PREFIXLEN", "IMAGE_FILE", "ACTION", "MODE", "INTERFACE", "PROXY_SUBNET",
     "DHCP_RANGE_START", "DHCP_RANGE_END", "DHCP_NETMASK", "DHCP_ROUTER", "DHCP_DNS", "LEASE_TIME",
+    "UNASSIGNED", "RETRY_SECONDS",
 ]
 
 
@@ -610,7 +611,8 @@ def default_env() -> dict:
     Proxy mode depends on the LAN's existing DHCP server; standalone owns the
     provisioning network outright, which is what makes it self-contained.
     """
-    return {"MODE": "dhcp", "ACTION": "reboot", "LEASE_TIME": "1h"}
+    return {"MODE": "dhcp", "ACTION": "reboot", "LEASE_TIME": "1h",
+            "UNASSIGNED": "image", "RETRY_SECONDS": "30"}
 
 
 def server_down() -> str:

@@ -14,10 +14,20 @@ ln -sfn /data/imager /srv/http/imager
 # missing directory 404s per request rather than breaking nginx at startup.
 ln -sfn /data/hosts  /srv/http/hosts
 
-export SERVER_IP IMAGE_FILE ACTION
-# boot.ipxe dispatches on MAC and falls back to default.ipxe.
-envsubst '${SERVER_IP}'                                < /boot.ipxe.tmpl    > /srv/http/boot.ipxe
-envsubst '${SERVER_IP} ${IMAGE_FILE} ${ACTION}'        < /default.ipxe.tmpl > /srv/http/default.ipxe
+# UNASSIGNED decides what a machine with no per-machine assignment gets:
+#   image (default) — the default image, i.e. plug in a switch and image it all
+#   hold            — discovery: print the MAC, touch nothing, retry
+RETRY_SECONDS="${RETRY_SECONDS:-30}"
+case "${UNASSIGNED:-image}" in
+    hold) FALLBACK="unassigned.ipxe";;
+    *)    FALLBACK="default.ipxe";;
+esac
+
+export SERVER_IP IMAGE_FILE ACTION FALLBACK RETRY_SECONDS
+# boot.ipxe dispatches on MAC and falls back to whichever of the two applies.
+envsubst '${SERVER_IP} ${FALLBACK}'                    < /boot.ipxe.tmpl       > /srv/http/boot.ipxe
+envsubst '${SERVER_IP} ${IMAGE_FILE} ${ACTION}'        < /default.ipxe.tmpl    > /srv/http/default.ipxe
+envsubst '${RETRY_SECONDS}'                            < /unassigned.ipxe.tmpl > /srv/http/unassigned.ipxe
 # Bind the listener to the provisioning IP rather than every host interface.
 envsubst '${SERVER_IP}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
 

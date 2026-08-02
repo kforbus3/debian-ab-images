@@ -4,6 +4,7 @@ FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         linux-image-amd64 \
         busybox-static \
+        gdisk \
         zstd \
         xz-utils \
         cpio \
