@@ -119,6 +119,19 @@ sync; umount /mnt/slot
 
 mount "/dev/${BB}p3" /mnt/boot 2>/dev/null && {
     sed -i 's/ quiet//g; s/^set timeout=.*/set timeout=1/' /mnt/boot/grub/grub.cfg
+    # Deliberately destroy slot B's kernel before the update. Both kernels are
+    # byte-identical here, so comparing them after the fact would prove nothing;
+    # a slot B that boots afterwards can only mean the update actually replaced
+    # it. Slot A -- the one running -- is left alone, which is also the point:
+    # an update must not touch the kernel the machine is currently relying on.
+    if [ -f /mnt/boot/B/vmlinuz ]; then
+        echo "  slot layout: $(ls /mnt/boot/A /mnt/boot/B | tr '\n' ' ')"
+        printf 'NOT A KERNEL' > /mnt/boot/B/vmlinuz
+        printf 'NOT AN INITRAMFS' > /mnt/boot/B/initrd.img
+        echo "  slot B kernel deliberately corrupted before the update"
+    else
+        echo "  NOTE: this image has no per-slot kernels; skipping the kernel check"
+    fi
     umount /mnt/boot
 }
 losetup -d "$LO"
@@ -152,9 +165,26 @@ echo "=== result ==="
 AFTER=/output/update-after-reboot.log
 ok=1
 grep -qa "Slot B (rootfs.1)" "$AFTER" || { echo "  FAIL: GRUB did not select slot B"; ok=0; }
-grep -qa "does not exist" "$AFTER" && {
+# Specifically the root device, not any "does not exist" line: the boot log
+# routinely contains others (systemd noting /sbin/tomoyo-init is absent), and
+# matching those reported a failure on a machine that had booted perfectly.
+grep -qa "LABEL=rootfs-b does not exist" "$AFTER" && {
     echo "  FAIL: slot B has no filesystem label — the post-install hook did not run"; ok=0; }
 grep -qa "Welcome to" "$AFTER" || { echo "  FAIL: slot B did not reach userspace"; ok=0; }
+# The kernel check reads the disk rather than the hook's output: RAUC does not
+# surface hook stdout in the install log, so grepping for it reported a missing
+# kernel on a machine that had just booted the new one.
+LO=$(losetup -f --show -P "$DISK"); BB=$(basename "$LO")
+IFS=: read -r mj mn < "/sys/class/block/${BB}p3/dev"
+rm -f "/dev/${BB}p3"; mknod "/dev/${BB}p3" b "$mj" "$mn"
+mkdir -p /mnt/bootchk && mount "/dev/${BB}p3" /mnt/bootchk
+ksize=$(stat -c %s /mnt/bootchk/B/vmlinuz 2>/dev/null || echo 0)
+umount /mnt/bootchk; losetup -d "$LO"
+if [ "$ksize" -gt 1000000 ]; then
+    echo "  slot B kernel restored by the update: $ksize bytes"
+else
+    echo "  FAIL: slot B's kernel was not replaced (size $ksize)"; ok=0
+fi
 grep -qa "ab-mark-good" "$AFTER" || echo "  WARN: ab-mark-good did not run in slot B"
 if [ "$ok" = 1 ]; then
     echo "  PASS: installed on slot A, rebooted into slot B, and slot B came up"

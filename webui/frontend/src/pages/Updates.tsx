@@ -16,6 +16,8 @@ export default function Updates() {
   const [images, setImages] = useState<string[]>([]);
   const [image, setImage] = useState("");
   const [version, setVersion] = useState("");
+  const [luks, setLuks] = useState("");
+  const [encrypted, setEncrypted] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
 
@@ -29,7 +31,11 @@ export default function Updates() {
       const { data } = await api.get("/images");
       // Bundles are built from an uncompressed image: the builder has to mount
       // the root slot out of it, which it cannot do through zstd or gzip.
-      setImages(data.images.map((i: any) => i.name).filter((n: string) => n.endsWith(".img")));
+      const imgs = data.images.filter((i: any) => i.name.endsWith(".img"));
+      setImages(imgs.map((i: any) => i.name));
+      // Encrypted images need their passphrase to be read; the field only
+      // appears when the selected image actually requires it.
+      setEncrypted(Object.fromEntries(imgs.map((i: any) => [i.name, !!i.meta?.encrypted])));
     } catch { /* the selector simply stays empty */ }
   }
 
@@ -39,7 +45,8 @@ export default function Updates() {
   async function build() {
     setBusy(true); setLog([]);
     try {
-      const { data } = await api.post("/bundles/build", { image, version });
+      const { data } = await api.post("/bundles/build",
+        { image, version, luks_passphrase: encrypted[image] ? luks : undefined });
       toast.success("Building bundle");
       const token = (await api.post(`/jobs/${data.id}/stream-token`)).data.token;
       const es = new EventSource(`/api/jobs/${data.id}/stream?token=${token}`);
@@ -93,7 +100,20 @@ export default function Updates() {
             </div>
           </div>
 
-          <Button className="mt-4" loading={busy} disabled={!image} onClick={build}>
+          {encrypted[image] && (
+            <div className="mt-3">
+              <Label>LUKS passphrase for {image}</Label>
+              <Input type="password" value={luks} onChange={(e) => setLuks(e.target.value)}
+                     placeholder="required to read the encrypted root slot" />
+              <p className="mt-1 text-xs text-zinc-500">
+                Used only while building. The bundle carries a plain filesystem and
+                installs on encrypted and unencrypted machines alike.
+              </p>
+            </div>
+          )}
+
+          <Button className="mt-4" loading={busy}
+                  disabled={!image || (encrypted[image] && !luks)} onClick={build}>
             <Package size={14} /> Build bundle
           </Button>
 

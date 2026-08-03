@@ -75,6 +75,11 @@ rm -f /etc/cryptsetup-keys.d/*.key
 sed -i '/KEYFILE_PATTERN/d' /etc/cryptsetup-initramfs/conf-hook 2>/dev/null || true
 
 update-initramfs -u
+# GRUB boots this slot's own copy under /boot/<A|B>/, not the versioned file
+# update-initramfs just wrote. Without this the regenerated initramfs -- the one
+# that can unlock via TPM or Tang -- is never loaded, and the machine comes up
+# asking for a passphrase instead.
+/usr/local/sbin/ab-sync-boot.sh || log "WARNING: could not update this slot's initramfs copy"
 touch "$STAMP"
 systemctl disable luks-enroll.service >/dev/null 2>&1 || true
 log "done — key material removed from disk"

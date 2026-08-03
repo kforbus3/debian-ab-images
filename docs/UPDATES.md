@@ -54,13 +54,17 @@ Keep `output/rauc-keys/` and keep it private. Losing `key.pem` means no further
 updates for machines already deployed; leaking it means someone else can sign an
 update your fleet will install.
 
-### Two constraints on the source image
+### One constraint on the source image
 
 - **Uncompressed** (`.img`, not `.img.zst`) — the builder mounts the root slot
   out of it.
-- **Unencrypted** — bundling from a LUKS image is not supported yet. Build an
-  unencrypted image of the same release to bundle from; encrypted machines can
-  still install those bundles, only the packaging side is affected.
+- **Encrypted images are fine**, but the builder needs the passphrase to read
+  the root slot: `--luks-passphrase` on the command line, or the field that
+  appears on the Updates page when you pick an encrypted image. It is used only
+  while building. What goes into the bundle is the plain filesystem, so a bundle
+  built from an encrypted image is not itself encrypted and installs on
+  encrypted and unencrypted machines alike — each machine writes into its own
+  already-unlocked slot.
 
 Bundles land in `output/bundles/` and are served at `http://<server>/bundles/`.
 The newest is recorded in `output/bundles/latest`, which is what `ab-update`
@@ -81,21 +85,32 @@ to a disk by hand has no such file and needs the URL given explicitly.
 
 Nothing about the running system changes until the reboot.
 
-## What a bundle does not update
+## The kernel, and what a bundle still does not update
 
-The bundle carries the **root filesystem only**. `/boot` is shared between both
-slots and is not part of it, so an update does **not** replace the kernel, the
-initramfs, or `grub.cfg`. A machine keeps booting the kernel it was imaged with.
+A bundle carries the root filesystem **and** the kernel and initramfs.
 
-That matters in two ways:
+`/boot` is one shared partition, so each slot has its own kernel under a fixed
+name — `/boot/A/vmlinuz` and `/boot/B/vmlinuz`, with matching `initrd.img`. An
+update writes only the inactive slot's pair, so the kernel the machine is
+currently running is never touched and a rollback lands on a slot whose kernel
+and root filesystem still match each other. Because the names carry no version,
+`grub.cfg` never has to change.
 
-- A kernel upgrade cannot be delivered this way. Re-image for that.
-- Changes to the initramfs logic (the overlay root, recovery entries) reach a
-  machine only by re-imaging, because that code lives in the initramfs on
-  `/boot`.
+The versioned files `dpkg` installs (`/boot/vmlinuz-6.12.x`) stay where they
+are; they are what `update-initramfs` writes to. Anything that regenerates the
+initramfs on a running machine must therefore copy it into the slot's directory
+or GRUB will not load it:
 
-Everything in userspace — packages, `/usr`, configuration shipped in the image —
-does update.
+```bash
+ab-sync-boot            # copy this machine's current kernel+initramfs into its slot
+```
+
+`luks-enroll` already does this — it regenerates the initramfs so the machine
+can unlock via TPM or Tang, and without the copy the machine would come back
+asking for a passphrase.
+
+**Still not updated by a bundle:** `grub.cfg` itself, the GRUB binaries in the
+ESP, and the partition layout. Changing those needs a re-image.
 
 ## Watching a rollout
 

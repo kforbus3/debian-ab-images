@@ -612,11 +612,12 @@ fi
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
          "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
          "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
-         "$MNT/usr/local/sbin/ab-update.sh"
+         "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh"
 # The others are only ever run by systemd; this one is run by a person, so it
 # gets a name without the extension and a place on the default PATH.
 ln -sf ab-overlay-diff.sh "$MNT/usr/local/sbin/ab-overlay-diff"
 ln -sf ab-update.sh       "$MNT/usr/local/sbin/ab-update"
+ln -sf ab-sync-boot.sh    "$MNT/usr/local/sbin/ab-sync-boot"
 
 # Recovery is the thing nobody remembers under pressure, so the machine says it
 # on every login rather than leaving it to documentation on another computer.
@@ -727,6 +728,26 @@ chroot "$MNT" grub-install --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi
 KVER="$(ls "$BOOTMNT" | sed -n 's/^vmlinuz-//p' | head -n1)"
 [ -n "$KVER" ] || die "no kernel found on BOOT partition"
 log "Kernel version: $KVER"
+
+# Each slot gets its own copy of the kernel and initramfs, under a name that
+# never changes. /boot is a single shared partition, so without this both slots
+# boot the same kernel -- and an update could not deliver a new one without
+# replacing the kernel the *running* slot depends on, which would break rollback
+# the moment the new slot failed. Per-slot copies mean an update writes only the
+# inactive slot's kernel, and falling back to the old slot falls back to its
+# kernel too.
+#
+# The names carry no version, so grub.cfg never has to change: an update
+# replaces /A/vmlinuz in place. The versioned originals stay where dpkg put them
+# at the top of /boot, because that is where the kernel packages and
+# update-initramfs expect to find them.
+for sl in A B; do
+    mkdir -p "$BOOTMNT/$sl"
+    cp -a "$BOOTMNT/vmlinuz-$KVER"    "$BOOTMNT/$sl/vmlinuz"
+    cp -a "$BOOTMNT/initrd.img-$KVER" "$BOOTMNT/$sl/initrd.img"
+done
+log "Per-slot kernels staged: /A and /B"
+
 sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" \
     "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
 chroot "$MNT" grub-editenv /boot/grub/grubenv create

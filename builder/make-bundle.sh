@@ -22,6 +22,8 @@ VERSION=""
 OUTPUT=""
 COMPATIBLE=""
 KEYDIR="${KEYDIR:-/output/rauc-keys}"
+LUKS_PASS="${LUKS_PASS:-}"              # only needed for an encrypted source image
+MAPNAME="ab-bundle-src"
 DESCRIPTION=""
 
 log()  { echo -e "\033[0;32m[bundle]\033[0m $*"; }
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
         --compatible)  COMPATIBLE="$2"; shift 2;;
         --description) DESCRIPTION="$2"; shift 2;;
         --keydir)      KEYDIR="$2"; shift 2;;
+        --luks-passphrase) LUKS_PASS="$2"; shift 2;;
         -h|--help) sed -n '2,20p' "$0"; exit 0;;
         *) die "unknown option '$1'";;
     esac
@@ -62,6 +65,7 @@ fi
 WORK="$(mktemp -d)"
 cleanup() {
     mountpoint -q "$WORK/slot" 2>/dev/null && umount "$WORK/slot" || true
+    cryptsetup close "$MAPNAME" 2>/dev/null || true
     [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null || true
     rm -rf "$WORK"
 }
@@ -80,11 +84,6 @@ done
 SLOT_PART=""
 for n in $(ls /sys/class/block/ 2>/dev/null | sed -n "s/^${BB}p//p" | sort -n); do
     dev="/dev/${BB}p${n}"
-    if cryptsetup isLuks "$dev" 2>/dev/null; then
-        die "this image is encrypted; bundling an encrypted slot is not supported yet.
-  Build the image without --encrypt to produce update bundles from it, or take
-  the bundle from an unencrypted build of the same release."
-    fi
     if [ "$(sgdisk -i "$n" "$LOOP" 2>/dev/null | sed -n 's/^Partition name: .\(.*\).$/\1/p')" = "rootfs-a" ]; then
         SLOT_PART="$dev"; break
     fi
@@ -92,7 +91,52 @@ done
 [ -n "$SLOT_PART" ] || die "could not find the rootfs-a partition in $IMAGE"
 
 mkdir -p "$WORK/slot" "$WORK/bundle"
+
+# An encrypted image keeps the filesystem inside a LUKS container, so the slot
+# has to be opened before it can be read. Only the builder needs the passphrase:
+# what goes into the bundle is the plain filesystem, and the machine installing
+# it writes into its own already-unlocked slot. So a bundle built from an
+# encrypted image is not itself encrypted, and installs on encrypted and
+# unencrypted machines alike.
+if cryptsetup isLuks "$SLOT_PART" 2>/dev/null; then
+    [ -n "$LUKS_PASS" ] || die "this image is encrypted; pass --luks-passphrase (or set
+  LUKS_PASS) so the root slot can be read. The passphrase is used here only, and
+  is not stored in the bundle."
+    printf '%s' "$LUKS_PASS" | cryptsetup open --readonly "$SLOT_PART" "$MAPNAME" - 2>/dev/null \
+        || die "the LUKS passphrase did not unlock the root slot"
+    SLOT_PART="/dev/mapper/$MAPNAME"
+    log "Opened the encrypted root slot"
+fi
+
 mount -o ro "$SLOT_PART" "$WORK/slot" || die "could not mount the root slot"
+
+# The kernel and initramfs come from the source image's BOOT partition, not from
+# the root slot -- /boot is a separate filesystem, so it is an empty mountpoint
+# inside the slot. Carrying them means an update can deliver a new kernel; the
+# post-install hook writes them to the target slot's directory only, leaving the
+# running slot's kernel alone so rollback still lands somewhere that boots.
+BOOT_PART=""
+for n in $(ls /sys/class/block/ 2>/dev/null | sed -n "s/^${BB}p//p" | sort -n); do
+    if [ "$(sgdisk -i "$n" "$LOOP" 2>/dev/null | sed -n 's/^Partition name: .\(.*\).$/\1/p')" = "BOOT" ]; then
+        BOOT_PART="/dev/${BB}p${n}"; break
+    fi
+done
+if [ -n "$BOOT_PART" ]; then
+    mkdir -p "$WORK/bootsrc" "$WORK/bundle"
+    if mount -o ro "$BOOT_PART" "$WORK/bootsrc" 2>/dev/null; then
+        _kv="$(ls "$WORK/bootsrc" | sed -n 's/^vmlinuz-//p' | head -1)"
+        if [ -n "$_kv" ]; then
+            mkdir -p "$WORK/bootfiles"
+            cp "$WORK/bootsrc/vmlinuz-$_kv"    "$WORK/bootfiles/vmlinuz"
+            cp "$WORK/bootsrc/initrd.img-$_kv" "$WORK/bootfiles/initrd.img"
+            log "Including kernel $_kv in the bundle"
+        else
+            log "WARNING: no kernel on the source image's BOOT partition; the bundle"
+            log "         will update userspace only"
+        fi
+        umount "$WORK/bootsrc"
+    fi
+fi
 
 if [ -z "$COMPATIBLE" ]; then
     COMPATIBLE="$(sed -n 's/^compatible=//p' "$WORK/slot/etc/rauc/system.conf" 2>/dev/null | head -1)"
@@ -137,6 +181,16 @@ case "$1" in
             *) exit 0;;
         esac
         e2label "$RAUC_SLOT_DEVICE" "$label"
+
+        # The kernel for this slot, if the bundle carries one. Written under
+        # /boot/<A|B>/ so only the slot just updated changes: the running slot
+        # keeps the kernel it booted, which is what a rollback needs.
+        if [ -f "$RAUC_BUNDLE_MOUNT_POINT/boot.tar.gz" ]; then
+            mkdir -p "/boot/$RAUC_SLOT_BOOTNAME"
+            tar -C "/boot/$RAUC_SLOT_BOOTNAME" -xzf "$RAUC_BUNDLE_MOUNT_POINT/boot.tar.gz"
+            sync
+            echo "installed kernel for slot $RAUC_SLOT_BOOTNAME"
+        fi
         ;;
 esac
 exit 0
@@ -167,6 +221,11 @@ hooks=post-install
 EOF
 
 umount "$WORK/slot"
+cryptsetup close "$MAPNAME" 2>/dev/null || true
+
+if [ -f "$WORK/bootfiles/vmlinuz" ]; then
+    tar -C "$WORK/bootfiles" -czf "$WORK/bundle/boot.tar.gz" .
+fi
 
 OUTPUT="${OUTPUT:-/output/bundles/${COMPATIBLE}-${VERSION}.raucb}"
 mkdir -p "$(dirname "$OUTPUT")"

@@ -49,13 +49,27 @@ async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
             "Bundles are built from an uncompressed .img. Rebuild that image with "
             "compression set to none, or decompress it first.",
         )
+    # An encrypted image keeps its root slot inside a LUKS container, so the
+    # builder needs the passphrase to read it. Only the builder does: the bundle
+    # itself carries a plain filesystem and installs on any machine.
+    # list_images nests the builder's sidecar under "meta"; the flag lives there.
+    row = next((i for i in orch.list_images()[0] if i["name"] == image), {})
+    encrypted = bool(row.get("meta", {}).get("encrypted"))
+    passphrase = str(body.get("luks_passphrase") or "")
+    if encrypted and not passphrase:
+        raise HTTPException(400, f"{image} is encrypted; its LUKS passphrase is needed "
+                                 "to read the root slot. It is used only while building "
+                                 "and is not stored in the bundle.")
     if jobs.running(type="bundle"):
         raise HTTPException(409, "A bundle build is already running")
 
-    cmd, label = orch.build_bundle_cmd(
+    cmd, label, env = orch.build_bundle_cmd(
         image,
         version=str(body.get("version") or ""),
         description=str(body.get("description") or ""),
+        encrypted=encrypted,
     )
-    job = await jobs.start(type="bundle", label=label, cmd=cmd, now=orch.now())
+    if encrypted:
+        env["LUKS_PASS"] = passphrase
+    job = await jobs.start(type="bundle", label=label, cmd=cmd, now=orch.now(), env=env)
     return job.public()

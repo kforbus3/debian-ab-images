@@ -450,7 +450,8 @@ def list_images() -> tuple[list[dict], bool]:
     return items, imager_ready
 
 
-def build_bundle_cmd(image: str, version: str = "", description: str = "") -> tuple[list[str], str]:
+def build_bundle_cmd(image: str, version: str = "", description: str = "",
+                     encrypted: bool = False) -> tuple[list[str], str, dict]:
     """Package a built image into a signed RAUC update bundle.
 
     Runs the builder container with its make-bundle entrypoint. Privileged for
@@ -462,16 +463,20 @@ def build_bundle_cmd(image: str, version: str = "", description: str = "") -> tu
         args += ["--version", version]
     if description:
         args += ["--description", description]
+    # The passphrase travels in the environment, never on a command line where
+    # it would show up in `ps` and in the job's stored metadata.
+    env = {"LUKS_PASS": ""} if not encrypted else {}
     script = (
         _docker_build("builder", "debian-ab-builder:amd64")
         + "echo '--- building update bundle ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + "--privileged --platform=linux/amd64 "
         + f"-v {_q(host_output_dir())}:/output "
+        + ("-e LUKS_PASS " if encrypted else "")
         + "--entrypoint /build/make-bundle.sh debian-ab-builder:amd64 "
         + " ".join(_q(a) for a in args) + "\n"
     )
-    return ["bash", "-c", script], f"Build update bundle from {image}"
+    return ["bash", "-c", script], f"Build update bundle from {image}", env
 
 
 def list_bundles() -> list[dict]:
