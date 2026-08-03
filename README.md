@@ -49,6 +49,14 @@ GPT:
   disabled on UEFI machines.
 - **A/B roots** let you update atomically: write the inactive slot, flip the
   GRUB boot order, reboot. Both slots are populated at build time.
+- **Root is an overlay**: the slot is the read-only lower layer and everything
+  written since imaging lands on the overlay partition. So `/home` is as large
+  as the disk rather than the root slot, and an update replaces the OS without
+  destroying user data. The upper layer is shared by both slots, which means a
+  change you make in one slot is still there in the other — when that is the
+  problem, the GRUB menu has **Recovery** entries to reset it or bypass it, and
+  `ab-overlay-diff` on the machine shows what changed. See
+  [docs/RECOVERY.md](docs/RECOVERY.md).
 - **GRUB + RAUC** integration: slot selection lives in `grubenv`; [RAUC](https://rauc.io/)
   is preconfigured (`compatible=<distro>-ab`) for signed bundle updates.
 - **Smallest possible image** by default: the image is sized to its contents and
@@ -153,6 +161,7 @@ network where you intend every PXE-booting machine to be re-imaged.
 - [docs/BUILDER.md](docs/BUILDER.md) — image build options and customization
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — provisioning server, DHCP modes, real-hardware + QEMU testing
 - [docs/UPDATES.md](docs/UPDATES.md) — RAUC atomic updates and A/B slot switching
+- **[docs/RECOVERY.md](docs/RECOVERY.md) — the overlay root, and the GRUB recovery entries when a change breaks a machine**
 - [docs/SECURITY.md](docs/SECURITY.md) — secrets, signing, network exposure
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 

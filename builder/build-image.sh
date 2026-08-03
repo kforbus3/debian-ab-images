@@ -528,7 +528,29 @@ cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
-         "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh"
+         "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
+         "$MNT/usr/local/sbin/ab-overlay-diff.sh"
+# The others are only ever run by systemd; this one is run by a person, so it
+# gets a name without the extension and a place on the default PATH.
+ln -sf ab-overlay-diff.sh "$MNT/usr/local/sbin/ab-overlay-diff"
+
+# Recovery is the thing nobody remembers under pressure, so the machine says it
+# on every login rather than leaving it to documentation on another computer.
+cat > "$MNT/etc/motd" <<'MOTD'
+
+  A/B image-based system.  Root is an overlay: the image is read-only
+  underneath, and everything written since imaging lives on the overlay
+  partition, shared by both slots so updates never destroy /home.
+
+    ab-overlay-diff        what this machine changed, and what it hides
+    ab-overlay-diff -a     include added and deleted files
+
+  Recovery is in the GRUB menu at boot (hold Shift / press Esc):
+    "Recovery: Slot A|B, reset overlay"   start clean, keep a copy in
+                                          /var/lib/overlay/upper.prev
+    "Recovery: Slot A|B, no overlay"      boot the image exactly as written
+
+MOTD
 chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service machine-identity.service
 
 [ -f "$MNT/etc/rauc/keyring.pem" ] || cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null || touch "$MNT/etc/rauc/keyring.pem"

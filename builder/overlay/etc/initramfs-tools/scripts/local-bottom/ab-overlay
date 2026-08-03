@@ -23,9 +23,11 @@ esac
 
 msg() { echo "ab-overlay: $*" > /dev/kmsg 2>/dev/null || echo "ab-overlay: $*"; }
 
+RESET=0
 for arg in $(cat /proc/cmdline 2>/dev/null); do
     case "$arg" in
         ab.overlay=off) msg "disabled on the command line; booting the slot directly"; exit 0;;
+        ab.overlay=reset) RESET=1;;
     esac
 done
 
@@ -71,6 +73,32 @@ undo() {                       # leave the slot exactly as it was found
 
 mount -t ext4 "$OVL" /ab-rw 2>/dev/null || undo "overlay filesystem would not mount"
 
+# --- ab.overlay=reset: boot once from a clean upper layer ---------------------
+#
+# Everything written since the machine was imaged lives in the upper layer, so a
+# bad edit there follows you into the other slot and makes "boot the other slot
+# to recover" useless. This sets the upper layer aside and starts an empty one.
+#
+# It is a rename, not a delete: same filesystem, so it is instant and costs no
+# space, and every file is still there under /var/lib/overlay/upper.prev for you
+# to copy back. Nothing is written to grubenv, so this applies to one boot only.
+#
+# If a previous snapshot is already there, refuse rather than overwrite it -- a
+# second reset would otherwise destroy the state you were trying to rescue. That
+# is safe to refuse because ab.overlay=off always boots the slot regardless.
+if [ "$RESET" = 1 ]; then
+    if [ -e /ab-rw/upper.prev ]; then
+        msg "reset refused: /var/lib/overlay/upper.prev already exists, and"
+        msg "  overwriting it would destroy the earlier snapshot. Move or remove"
+        msg "  it first, or boot with ab.overlay=off to get in and clean up."
+    elif mv /ab-rw/upper /ab-rw/upper.prev 2>/dev/null; then
+        rm -rf /ab-rw/work 2>/dev/null || true
+        msg "upper layer set aside as /var/lib/overlay/upper.prev; starting clean"
+    else
+        msg "could not set the upper layer aside; continuing with it as it is"
+    fi
+fi
+
 # --- reconcile the upper layer with the slot being booted --------------------
 #
 # The upper layer was written against whichever slot was running at the time. If
@@ -107,13 +135,17 @@ if ! mount -t overlay -o "lowerdir=/ab-lower,upperdir=/ab-rw/upper,workdir=/ab-r
     undo "overlay mount failed"
 fi
 
-# Both layers stay reachable from inside the running system: /var/lib/overlay so
-# the partition is where fstab and everything else expect it, and /run/ab-lower
-# so the untouched slot can be inspected -- which is how you tell whether a file
-# came from the image or from something written afterwards.
-mkdir -p "$rootmnt/var/lib/overlay" "$rootmnt/run/ab-lower" 2>/dev/null || true
+# The overlay partition stays reachable at /var/lib/overlay, where fstab and
+# everything else expect it -- and where upper.prev has to be readable after a
+# reset boot for any of this to be recoverable.
+#
+# The lower layer is deliberately NOT bound into /run here. It was, and it never
+# survived: systemd mounts a fresh tmpfs over /run right after the switch to
+# root, so the bind was gone before anyone could look at it, and ab-overlay-diff
+# silently reported every changed file as new. It mounts the slot read-only
+# itself instead, which does not depend on anything surviving that transition.
+mkdir -p "$rootmnt/var/lib/overlay" 2>/dev/null || true
 bind_mount /ab-rw "$rootmnt/var/lib/overlay" || true
-bind_mount /ab-lower "$rootmnt/run/ab-lower" || true
 
 msg "root is now an overlay (lower=slot ${SLOT:-?}, upper=overlay partition)"
 exit 0
