@@ -81,6 +81,22 @@ to a disk by hand has no such file and needs the URL given explicitly.
 
 Nothing about the running system changes until the reboot.
 
+## What a bundle does not update
+
+The bundle carries the **root filesystem only**. `/boot` is shared between both
+slots and is not part of it, so an update does **not** replace the kernel, the
+initramfs, or `grub.cfg`. A machine keeps booting the kernel it was imaged with.
+
+That matters in two ways:
+
+- A kernel upgrade cannot be delivered this way. Re-image for that.
+- Changes to the initramfs logic (the overlay root, recovery entries) reach a
+  machine only by re-imaging, because that code lives in the initramfs on
+  `/boot`.
+
+Everything in userspace — packages, `/usr`, configuration shipped in the image —
+does update.
+
 ## Watching a rollout
 
 The **Fleet** page lists every machine this server has imaged, what it is
