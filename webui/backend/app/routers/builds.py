@@ -1,4 +1,5 @@
 import json
+import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -68,12 +69,43 @@ async def preflight(_: str = Depends(require_auth)):
             "host_project_dir": orch.host_project_dir()}
 
 
+@router.get("/overlay")
+async def overlay(_: str = Depends(require_auth)):
+    """Files that will be copied into the next image, and what that means.
+
+    Shown in the UI so the effect of overlay.d is visible before a build rather
+    than discovered on a machine afterwards.
+    """
+    files = orch.overlay_files()
+    return {
+        "files": files,
+        "dir": f"{orch.host_project_dir()}/overlay.d",
+        "count": len(files),
+    }
+
+
 @router.post("/builds")
 async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
     _require_ready()
     _validate_build(opts)
     if jobs.running(type="image"):
         raise HTTPException(409, "An image build is already running")
+    # The customization script travels through the output directory, which the
+    # builder already mounts. Written before the job starts so a failure to
+    # write it is reported here rather than as a confusing build error.
+    script = str(opts.get("run_script") or "").strip()
+    script_path = os.path.join(orch.settings.output_dir, ".build-script.sh")
+    try:
+        if script:
+            if not script.startswith("#!"):
+                script = "#!/bin/bash\nset -euo pipefail\n" + script
+            with open(script_path, "w") as f:
+                f.write(script if script.endswith("\n") else script + "\n")
+            os.chmod(script_path, 0o755)
+        elif os.path.exists(script_path):
+            os.remove(script_path)
+    except OSError as exc:
+        raise HTTPException(500, f"could not stage the customization script: {exc}")
     cmd, label, env = orch.build_image_cmd(opts)
     job = await jobs.start(type="image", label=label, cmd=cmd, now=orch.now(), env=env)
     return job.public()

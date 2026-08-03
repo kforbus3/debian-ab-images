@@ -30,9 +30,15 @@ echo "[run] building builder image…"
 docker build --platform="$PLATFORM" -t "debian-ab-builder:${ARCH}" "$HERE"
 
 echo "[run] building A/B image into $OUT …"
+# overlay.d and any --run-script have to be visible inside the container, so
+# both are mounted read-only. Read-only because a build must not be able to
+# modify the files it is being customized with.
+CUSTOM="$(cd "$HERE/.." && pwd)/overlay.d"
+mkdir -p "$CUSTOM"
 docker run --rm --privileged \
     --platform="$PLATFORM" \
     -v "$OUT":/output \
+    -v "$CUSTOM":/overlay.d:ro \
     "debian-ab-builder:${ARCH}" "$@"
 
 echo "[run] artifacts:"

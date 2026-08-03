@@ -182,6 +182,17 @@ jobs:
             --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh | tee upd.log
           grep -q "PASS:" upd.log || { echo "::error::update did not complete"; exit 1; }
 
+      - name: Image-owned files override the machine
+        run: |
+          mkdir -p overlay.d/etc
+          printf '127.0.0.1 localhost\n10.0.2.50 ci-fileserver\n' > overlay.d/etc/hosts
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname customtest --username ci --password ci --image-size 8 \
+            --compress none --own-path /etc/resolv.conf --output /output/custom-test.img
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-image-customization.sh | tee custom.log
+          grep -q "PASS:" custom.log || { echo "::error::image-owned override failed"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

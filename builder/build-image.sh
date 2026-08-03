@@ -28,6 +28,9 @@ OVERLAY_MIN="${OVERLAY_MIN:-256}"       # overlay grows to fill the disk on firs
 IMAGE_SIZE="${IMAGE_SIZE:-auto}"        # GiB, or "auto" = smallest possible
 OUTPUT="${OUTPUT:-}"                    # empty = /output/<distro>-<suite>-ab.img
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
+OVERLAY_D="${OVERLAY_D:-/overlay.d}"     # your files, copied over the whole root
+RUN_SCRIPT="${RUN_SCRIPT:-}"             # script run inside the chroot at the end
+OWN_PATHS="${OWN_PATHS:-}"               # paths the image owns; see image-owned.list
 SSH_PUBKEY="${SSH_PUBKEY:-}"
 SSH_KEY_ONLY="${SSH_KEY_ONLY:-false}"
 COMPRESS="${COMPRESS:-zstd}"
@@ -53,6 +56,11 @@ Usage: $0 [options]
                           on first boot either way)
   --output PATH           Output image path
   --packages "a b c"      Extra packages to install
+  --overlay-dir DIR       Directory copied over the image root (default: $OVERLAY_D)
+  --run-script FILE       Shell script run inside the chroot after packages
+  --own-path PATH         Path the image owns: cleared from the persistent
+                          overlay on update so the image version wins.
+                          Repeatable. Everything in --overlay-dir is implied.
   --ssh-pubkey FILE       Authorized SSH key file for the user
   --ssh-authorized-key K  Authorized SSH key passed inline
   --ssh-key-only          Disable SSH password auth (requires an SSH key)
@@ -78,6 +86,9 @@ while [[ $# -gt 0 ]]; do
         --image-size) IMAGE_SIZE="$2"; shift 2;;
         --output) OUTPUT="$2"; shift 2;;
         --packages) EXTRA_PACKAGES="$2"; shift 2;;
+        --overlay-dir) OVERLAY_D="$2"; shift 2;;
+        --run-script) RUN_SCRIPT="$2"; shift 2;;
+        --own-path) OWN_PATHS="$OWN_PATHS $2"; shift 2;;
         --ssh-pubkey) SSH_PUBKEY="$(cat "$2")"; shift 2;;
         --ssh-authorized-key) SSH_PUBKEY="$2"; shift 2;;
         --ssh-key-only) SSH_KEY_ONLY=true; shift;;
@@ -553,6 +564,46 @@ sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
 # it. Point it at the unlocked mappings instead; the initramfs opens all of
 # them (every crypttab entry carries the `initramfs` option), so both slots
 # are present at runtime, not just the booted one.
+
+# --- your files, and the paths the image owns -------------------------------
+#
+# Copied over the WHOLE root, not just etc/ and usr/ like the project's own
+# overlay above, and applied after it so your version of a file wins.
+#
+# Everything shipped here is also recorded as image-owned. That is the half that
+# makes "override whatever is on the machine" true rather than merely intended:
+# the root filesystem is an overlay, and a file already present in the machine's
+# upper layer shadows the image's copy -- so an update would install your
+# /etc/hosts and the machine would keep using its own. Recording the path lets
+# the initramfs drop that shadowing copy on the next update, at which point the
+# image's version is what the machine actually reads.
+OWNED_LIST="$MNT/usr/lib/ab/image-owned.list"
+mkdir -p "$(dirname "$OWNED_LIST")"
+: > "$OWNED_LIST"
+
+if [ -d "$OVERLAY_D" ] && [ -n "$(ls -A "$OVERLAY_D" 2>/dev/null)" ]; then
+    step "Applying your overlay from $OVERLAY_D"
+    # The directory's own README explains the directory; it is not part of the
+    # image, and copying it would put a stray /README.md on every machine.
+    ( cd "$OVERLAY_D" && tar -cf - --exclude=./README.md . ) | tar -xf - -C "$MNT"
+    # Record every file (not directory): clearing a whole directory from the
+    # upper layer would delete machine-local files that live alongside yours --
+    # dropping every netplan on the machine when you only shipped one.
+    ( cd "$OVERLAY_D" && find . \( -type f -o -type l \) ! -name README.md ) \
+        | sed 's|^\.||' | sort >> "$OWNED_LIST"
+    log "  $(wc -l < "$OWNED_LIST") file(s) will override the machine's own copies on update"
+fi
+
+for p in $OWN_PATHS; do
+    case "$p" in
+        /*) printf '%s\n' "$p" >> "$OWNED_LIST";;
+        *)  die "--own-path must be absolute (got '$p')";;
+    esac
+done
+if [ -s "$OWNED_LIST" ]; then
+    sort -u "$OWNED_LIST" -o "$OWNED_LIST"
+fi
+
 if [ "$ENCRYPT" = true ]; then
     sed -i "s|^device=/dev/disk/by-partlabel/rootfs-a|device=/dev/mapper/luks-rootfs-a|; \
             s|^device=/dev/disk/by-partlabel/rootfs-b|device=/dev/mapper/luks-rootfs-b|" \
@@ -596,6 +647,27 @@ chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service \
 # means images and bundles from this repo work together with no extra step.
 # Falling back to the CA bundle keeps unsigned-update-free behaviour for images
 # built before any key existed, rather than failing the build.
+# --- your customization script ----------------------------------------------
+#
+# Runs inside the chroot, after packages and both overlays, so it can enable a
+# unit that was just installed, add a user, or write a file that depends on the
+# hostname. Not everything is a file, which is why the overlay alone is not
+# enough.
+#
+# It runs with the image's own filesystem as / but the builder's kernel, so
+# anything needing a running system (systemctl start, a daemon) will not work --
+# systemctl enable does, because it only writes symlinks.
+if [ -n "$RUN_SCRIPT" ]; then
+    [ -f "$RUN_SCRIPT" ] || die "--run-script: no such file: $RUN_SCRIPT"
+    step "Running your customization script in the chroot"
+    install -m0755 "$RUN_SCRIPT" "$MNT/tmp/ab-custom.sh"
+    if ! chroot "$MNT" /tmp/ab-custom.sh; then
+        rm -f "$MNT/tmp/ab-custom.sh"
+        die "your --run-script failed (see its output above); the image was not finished"
+    fi
+    rm -f "$MNT/tmp/ab-custom.sh"
+fi
+
 RAUC_CERT="${RAUC_CERT:-/output/rauc-keys/cert.pem}"
 if [ -f "$RAUC_CERT" ]; then
     log "Trusting the update signing certificate ($RAUC_CERT)"

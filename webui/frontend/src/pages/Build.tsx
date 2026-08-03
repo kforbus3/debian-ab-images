@@ -24,6 +24,7 @@ export default function Build() {
     image_size: 0, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
+    run_script: "", own_paths: "",
   });
   const [log, setLog] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
@@ -32,6 +33,8 @@ export default function Build() {
   const [problems, setProblems] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ step: number; total: number; label: string } | null>(null);
   const [imagerArches, setImagerArches] = useState<Record<string, boolean> | null>(null);
+  const [overlay, setOverlay] = useState<{ files: { path: string; size: number }[]; dir: string } | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   const loadImagerArches = () =>
@@ -41,6 +44,7 @@ export default function Build() {
   useEffect(() => {
     api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
     loadImagerArches();
+    api.get("/overlay").then((r) => setOverlay(r.data)).catch(() => {});
     // Builds run for many minutes, so navigating away or reloading must not lose
     // the live log — reattach to whatever build is still running. The stream
     // replays the job's backlog before going live, so nothing is missed.
@@ -149,6 +153,69 @@ export default function Build() {
               <input type="checkbox" checked={opts.ssh_key_only} disabled={!opts.ssh_key} onChange={(e) => set("ssh_key_only", e.target.checked)} />
               SSH key-only (disable password login) {!opts.ssh_key && <span className="text-xs text-zinc-500">— add a key first</span>}
             </label>
+          </div>
+
+          <div className="mt-4 border-t border-zinc-800 pt-4">
+            <button type="button" onClick={() => setCustomOpen((v) => !v)}
+              className="flex w-full items-center justify-between text-sm font-medium text-zinc-200">
+              <span>Customize the filesystem</span>
+              <span className="text-xs text-zinc-500">
+                {overlay && overlay.files.length > 0 ? `${overlay.files.length} file(s) staged` : "optional"}
+                {customOpen ? " \u25be" : " \u25b8"}
+              </span>
+            </button>
+
+            {customOpen && (
+              <div className="mt-3 space-y-4">
+                <div>
+                  <Label>Files copied into the image</Label>
+                  {overlay && overlay.files.length > 0 ? (
+                    <ul className="max-h-32 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-2 font-mono text-xs text-zinc-300">
+                      {overlay.files.map((f) => <li key={f.path}>{f.path}</li>)}
+                    </ul>
+                  ) : (
+                    <p className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">
+                      Nothing staged. Put files under{" "}
+                      <span className="text-zinc-300">{overlay?.dir || "overlay.d"}</span>{" "}
+                      and they are copied over the image root, keeping their paths.
+                    </p>
+                  )}
+                  {/* The shadowing rule is the surprising part, so it is stated
+                      where the files are, not only in the documentation. */}
+                  <p className="mt-2 text-xs text-zinc-500">
+                    A file here replaces the machine's own copy at the same path on the
+                    update that delivers it. Other files in the same directory are left alone.
+                  </p>
+                </div>
+
+                <div>
+                  <Label>Also let the image own these paths</Label>
+                  <Input value={opts.own_paths} onChange={(e) => set("own_paths", e.target.value)}
+                         placeholder="/etc/hosts /etc/resolv.conf" />
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Space-separated, for paths you are not shipping a file for but still
+                    want the image to win.
+                  </p>
+                </div>
+
+                <div>
+                  <Label>Run inside the image after packages are installed</Label>
+                  <textarea
+                    value={opts.run_script}
+                    onChange={(e) => set("run_script", e.target.value)}
+                    spellCheck={false}
+                    rows={6}
+                    placeholder={"systemctl enable my-agent\nusermod -aG dialout admin"}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs outline-none placeholder:text-zinc-600 focus:border-brand-500"
+                  />
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Runs as root in a chroot, so <code>systemctl enable</code> works but
+                    starting a service does not \u2014 there is no running system yet. A
+                    non-zero exit fails the build.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="mt-4 border-t border-zinc-800 pt-4">

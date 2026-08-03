@@ -79,6 +79,36 @@ def host_output_dir() -> str:
     return f"{host_project_dir()}/output"
 
 
+def host_overlay_dir() -> str:
+    """Where your own files live, host-side, for the builder to bind-mount."""
+    return f"{host_project_dir()}/overlay.d"
+
+
+def overlay_files() -> list[dict]:
+    """What the next build will copy into the image, so the UI can show it.
+
+    Read from this container's view of the repo rather than the host path: the
+    two are the same directory, and only one of them is readable from here.
+    """
+    root = os.path.join(PROJ, "overlay.d")
+    out: list[dict] = []
+    if not os.path.isdir(root):
+        return out
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root)
+            if rel == "README.md":
+                continue
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                continue
+            out.append({"path": "/" + rel.replace(os.sep, "/"), "size": size})
+    out.sort(key=lambda r: r["path"])
+    return out
+
+
 def _self_image() -> str:
     """This container's image, reused for throwaway host-namespace helpers."""
     try:
@@ -308,6 +338,15 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         args += ["--ssh-authorized-key", opts["ssh_key"]]
     if opts.get("ssh_key_only"):
         args += ["--ssh-key-only"]
+    # Paths the image owns: cleared from a machine's persistent overlay on the
+    # update that delivers them, so the image's copy is the one it reads.
+    for path in str(opts.get("own_paths", "")).split():
+        if path.startswith("/"):
+            args += ["--own-path", path]
+    if opts.get("run_script"):
+        # Written into the output directory, which is already mounted, rather
+        # than adding another mount for a single file.
+        args += ["--run-script", "/output/.build-script.sh"]
     if opts.get("encrypt"):
         args += ["--encrypt", "--unlock", opts.get("unlock", "keyfile")]
         env["LUKS_PASS"] = opts.get("luks_passphrase", "")
@@ -322,6 +361,9 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         + "echo '--- starting image build ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + f"--privileged --platform={platform} -v {_q(host_output_dir())}:/output "
+        # Read-only: a build must not be able to change the files it is
+        # being customized with.
+        + f"-v {_q(host_overlay_dir())}:/overlay.d:ro "
         + "-e PASSWORD -e LUKS_PASS "
         + f"debian-ab-builder:{arch} {' '.join(_q(a) for a in args)} --output /output/{out_name}\n"
     )

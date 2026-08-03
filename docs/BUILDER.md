@@ -90,12 +90,68 @@ it.
 - **More packages:** `make image PACKAGES="qemu-guest-agent vim curl"` (or
   `--packages "qemu-guest-agent vim curl"` when calling the script directly).
   Also exposed as the "Extra packages" field in the web UI's build form.
-- **Bake in files/config:** add them under `builder/overlay/` — its `etc/` and
-  `usr/` trees are copied into the image. (Static files only; per-build values
-  like hostname/user are handled by the script.)
+- **Bake in files/config:** put them under **`overlay.d/`** at the top of the
+  checkout — see [Shipping your own files](#shipping-your-own-files) below.
+  (`builder/overlay/` is the project's own, and only its `etc/` and `usr/` trees
+  are copied; keep your files out of it so they are not committed.)
+- **Run commands inside the image:** `--run-script FILE`, or the script box in
+  the web UI's build form.
 - **Different base:** `--suite bookworm`, `--suite resolute` (Ubuntu 26.04),
   `--suite noble` (Ubuntu 24.04), `--suite jammy` (Ubuntu 22.04).
 - **SSH-key-only login:** pass `--ssh-pubkey` and set a strong throwaway password.
+
+## Shipping your own files
+
+Anything under `overlay.d/` at the top of the checkout is copied over the
+image's root filesystem, keeping its path:
+
+    overlay.d/etc/hosts                   ->  /etc/hosts
+    overlay.d/etc/netplan/10-corp.yaml    ->  /etc/netplan/10-corp.yaml
+    overlay.d/usr/local/bin/site-check    ->  /usr/local/bin/site-check
+    overlay.d/opt/agent/agent.conf        ->  /opt/agent/agent.conf
+
+Unlike `builder/overlay/`, the whole tree is copied, not just `etc/` and `usr/`,
+and it is applied afterwards — so your version of a file wins over the project's
+default. Everything there except its README is gitignored.
+
+### These files also override what is already on the machine
+
+This is the half that is easy to miss. A deployed machine's root is an overlay,
+and a file the machine has written shadows the image's copy — so shipping a new
+`/etc/hosts` would install it and the machine would carry on reading its own,
+with nothing to say so.
+
+Every file in `overlay.d/` is therefore recorded in the image as **image-owned**
+(`/usr/lib/ab/image-owned.list`). On the update that delivers it, the machine's
+copy **at that exact path** is dropped, so the image's version is what it reads.
+
+Per file, never per directory: shipping one netplan file does not remove the
+machine's others. Same path, image wins; everything else is left alone.
+
+Use `--own-path /etc/resolv.conf` (repeatable, or the field in the web UI) to
+claim a path you are not shipping a file for.
+
+What does **not** belong here: per-machine identity — hostname, `machine-id`,
+SSH host keys — which is generated on first boot and kept in the overlay on
+purpose. This is for fleet-wide configuration that should be part of the image.
+
+### Running commands in the image
+
+`--run-script FILE` runs a shell script inside the chroot after packages and
+both overlays are applied:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+systemctl enable my-agent          # writes symlinks: works
+usermod -aG dialout admin
+echo "site=hq" > /etc/site.conf
+```
+
+It runs as root with the image as `/`, but on the builder's kernel — so
+`systemctl enable` works while starting a service does not, because there is no
+running init. A non-zero exit fails the build rather than shipping a
+half-customized image.
 
 ## How it runs
 

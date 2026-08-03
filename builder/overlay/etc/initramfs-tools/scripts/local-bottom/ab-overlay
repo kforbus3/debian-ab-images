@@ -59,6 +59,17 @@ mkdir -p /ab-lower /ab-rw
 # to a plain root twice while looking like it had run.
 bind_mount() { mount -o bind "$1" "$2" 2>/dev/null || mount --bind "$1" "$2" 2>/dev/null; }
 
+# Removal has to be done through a helper because the initramfs may not have
+# rm: klibc ships `nuke` instead, and a bare `rm -rf` fails with "rm: not
+# found" -- to the kernel log only, so the script carries on as if it had
+# worked. The hook copies rm in; this is the backstop if that ever fails.
+remove_path() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    if rm -rf "$1" 2>/dev/null; then return 0; fi
+    if nuke "$1" 2>/dev/null; then return 0; fi
+    return 1
+}
+
 if ! bind_mount "$rootmnt" /ab-lower; then
     msg "could not bind the root slot as a lower layer; booting it directly"
     exit 0
@@ -92,7 +103,7 @@ if [ "$RESET" = 1 ]; then
         msg "  overwriting it would destroy the earlier snapshot. Move or remove"
         msg "  it first, or boot with ab.overlay=off to get in and clean up."
     elif mv /ab-rw/upper /ab-rw/upper.prev 2>/dev/null; then
-        rm -rf /ab-rw/work 2>/dev/null || true
+        remove_path /ab-rw/work || true
         msg "upper layer set aside as /var/lib/overlay/upper.prev; starting clean"
     else
         msg "could not set the upper layer aside; continuing with it as it is"
@@ -118,8 +129,36 @@ if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
     msg "slot changed ${LAST} -> ${SLOT}; clearing OS paths from the upper layer"
     for d in usr bin sbin lib lib32 lib64 libx32 boot \
              var/lib/dpkg var/lib/apt var/cache/apt; do
-        rm -rf "/ab-rw/upper/$d" 2>/dev/null || true
+        remove_path "/ab-rw/upper/$d" || true
     done
+
+    # Files the image declares it owns -- shipped in the build's overlay, or
+    # named with --own-path. Whatever the machine has written at those exact
+    # paths is dropped, so the copy that came with the update is the one it
+    # reads. Without this, shipping an /etc/hosts or an /etc/netplan file in a
+    # new image changes nothing on a machine that already has its own: the
+    # upper layer shadows it, silently and with no way to tell from inside.
+    #
+    # Per file, never per directory: clearing /etc/netplan wholesale would take
+    # the machine's other netplan files with it. Same name, image wins; anything
+    # else in that directory is left exactly as it was.
+    OWNED=/ab-lower/usr/lib/ab/image-owned.list
+    if [ -r "$OWNED" ]; then
+        n=0
+        while IFS= read -r path; do
+            case "$path" in
+                /*) ;;                      # absolute only; ignore anything else
+                *) continue;;
+            esac
+            case "$path" in
+                *..*) continue;;            # never let a manifest escape upper/
+            esac
+            if remove_path "/ab-rw/upper${path}"; then
+                n=$((n + 1))
+            fi
+        done < "$OWNED"
+        [ "$n" -gt 0 ] && msg "  dropped $n machine-local file(s) the new image owns"
+    fi
 fi
 [ -n "$SLOT" ] && { printf '%s\n' "$SLOT" > /ab-rw/.slot 2>/dev/null || true; }
 

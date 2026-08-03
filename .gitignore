@@ -35,3 +35,6 @@ Thumbs.db
 # exists, so this pair must be kept — and must not be committed: anyone holding
 # key.pem can sign an update the whole fleet will install.
 output/rauc-keys/
+# Your site-specific files: not the project's to carry.
+overlay.d/*
+!overlay.d/README.md
