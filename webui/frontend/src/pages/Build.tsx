@@ -4,6 +4,13 @@ import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert, ProgressBar } from "../components/ui";
 
+// One list, used for the Architecture selector and the imager buttons, so the
+// two can never drift apart.
+const ARCHES = [
+  { value: "amd64", label: "x86_64" },
+  { value: "arm64", label: "ARM64" },
+];
+
 const SUITES: Record<string, { value: string; label: string }[]> = {
   debian: [
     { value: "trixie", label: "trixie (13)" },
@@ -76,9 +83,9 @@ export default function Build() {
   // The imager is built for the architecture selected above, because it is a
   // kernel the target machine runs: an amd64 imager cannot netboot an arm64
   // machine, so building an arm64 image without one leaves it undeployable.
-  async function startImager() {
+  async function startImager(arch: string) {
     try {
-      const { data } = await api.post("/imager/build", { arch: opts.arch });
+      const { data } = await api.post("/imager/build", { arch });
       await stream(data.id);
       loadImagerArches();
     } catch (e) { toast.error(apiError(e)); }
@@ -106,19 +113,38 @@ export default function Build() {
 
   return (
     <div>
+      {/* Both architectures are listed whether or not either is built. A single
+          button following the Architecture selector further down the form read
+          as "this app only does amd64", because that is the default and nothing
+          on screen suggested otherwise. */}
       <PageHeader title="Build Image" subtitle="Produce a bootable Debian or Ubuntu A/B image" actions={
-        <Button variant="secondary" onClick={startImager} disabled={running}>
-          <Cpu size={15} /> Build {opts.arch} netboot imager
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-zinc-500">Netboot imager:</span>
+          {ARCHES.map((a) => {
+            const built = imagerArches?.[a.value];
+            return (
+              <Button key={a.value} variant="secondary" size="sm" disabled={running}
+                      onClick={() => startImager(a.value)}
+                      title={built ? `Rebuild the ${a.label} imager` : `Build the ${a.label} imager`}>
+                <Cpu size={13} />
+                {a.label}
+                <span className={built ? "text-emerald-400" : "text-zinc-500"}>
+                  {built ? "built" : "not built"}
+                </span>
+              </Button>
+            );
+          })}
+        </div>
       } />
-      {/* An arm64 image is undeployable without an arm64 imager, and the only
-          symptom is a machine that PXE-boots into nothing — so say it here,
-          next to the button that fixes it, rather than leaving it to be found. */}
+      {/* An image is undeployable without an imager of the same architecture,
+          and the only symptom is a machine that PXE-boots into nothing. */}
       {imagerArches && !imagerArches[opts.arch] && (
         <Alert title={`No ${opts.arch} netboot imager has been built`} items={[
           `Machines cannot be imaged over the network for ${opts.arch} until one exists — ` +
           `the imager is a kernel the machine itself runs, so it has to match. ` +
-          `Use "Build ${opts.arch} netboot imager" above. Images built here can still be written to a disk directly.`,
+          `Build it with the ${opts.arch} button above; it can be built on this server ` +
+          `whatever architecture the server itself is. Images built here can still be ` +
+          `written to a disk directly in the meantime.`,
         ]} />
       )}
       <Alert title="Builds cannot run yet" items={problems} />
@@ -132,8 +158,9 @@ export default function Build() {
             <div>
               <Label>Architecture</Label>
               <Select value={opts.arch} onChange={(e) => set("arch", e.target.value)}>
-                <option value="amd64">x86_64 (amd64)</option>
-                <option value="arm64">ARM64 (aarch64)</option>
+                {ARCHES.map((a) => (
+                  <option key={a.value} value={a.value}>{a.label} ({a.value})</option>
+                ))}
               </Select>
             </div>
             <div><Label>Compression</Label><Select value={opts.compress} onChange={(e) => set("compress", e.target.value)}><option value="zstd">zstd</option><option value="gzip">gzip</option><option value="none">none</option></Select></div>
