@@ -97,7 +97,9 @@ export default function Build() {
       <Alert title="Builds cannot run yet" items={problems} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">
-          <div className="grid grid-cols-2 gap-3">
+          {/* items-end keeps the inputs on a row level with each other when one
+              label wraps to a second line and its neighbour does not. */}
+          <div className="grid grid-cols-2 items-end gap-3">
             <div><Label>Distribution</Label><Select value={opts.distro} onChange={(e) => setDistro(e.target.value)}><option value="debian">Debian</option><option value="ubuntu">Ubuntu</option></Select></div>
             <div><Label>Release</Label><Select value={opts.suite} onChange={(e) => set("suite", e.target.value)}>{SUITES[opts.distro].map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}</Select></div>
             <div>
@@ -108,7 +110,12 @@ export default function Build() {
               </Select>
             </div>
             <div><Label>Compression</Label><Select value={opts.compress} onChange={(e) => set("compress", e.target.value)}><option value="zstd">zstd</option><option value="gzip">gzip</option><option value="none">none</option></Select></div>
-            <div><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
+            {/* Fields are grouped rather than left to flow in source order: the
+                two-column grid had put Username and Password diagonally opposite
+                each other, and left Root slot size alone in a half-empty row.
+                Hostname spans the row so the credentials sit together on theirs
+                and the two size fields share the next one. */}
+            <div className="col-span-2"><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
             <div><Label>Username</Label><Input value={opts.username} onChange={(e) => set("username", e.target.value)} /></div>
             <div><Label>Password</Label><Input type="password" value={opts.password} onChange={(e) => set("password", e.target.value)} placeholder="login password" /></div>
             <div><Label>Image size (GiB, 0 = smallest)</Label><Input type="number" min={0} value={opts.image_size} onChange={(e) => set("image_size", +e.target.value)} /></div>

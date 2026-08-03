@@ -109,6 +109,29 @@ export default function Provisioning() {
       setProblems(r.data.problems);
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   }
+  // UNASSIGNED is server configuration, but it is shown beside the per-machine
+  // assignments because that is where the decision is made. It therefore has no
+  // Save button of its own -- the nearest one saves assignments, which quietly
+  // dropped this setting on the floor. It now persists on change, merged onto
+  // the config as stored rather than onto local state, so unsaved edits in the
+  // configuration card are not swept along with it.
+  async function setUnassigned(v: string) {
+    const previous = cfg.UNASSIGNED || "image";
+    set("UNASSIGNED", v);
+    try {
+      const { data: stored } = await api.get("/server/config");
+      const { data } = await api.put("/server/config", { ...stored, UNASSIGNED: v });
+      setCfg((c) => ({ ...c, UNASSIGNED: data.UNASSIGNED || v }));
+      toast.success(v === "hold"
+        ? "Unassigned machines will be held for discovery"
+        : "Unassigned machines will be imaged with the default image");
+      api.get("/server/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
+    } catch (e) {
+      set("UNASSIGNED", previous);   // do not show a setting that was not stored
+      toast.error(apiError(e));
+    }
+  }
+
   async function ctrl(action: "up" | "down") {
     setBusy(true);
     try { await api.post(`/server/${action}`); toast.success(action === "up" ? "Server starting" : "Server stopped"); await loadAll(); }
@@ -247,20 +270,23 @@ export default function Provisioning() {
           </p>
           <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
             <Label>Machines with no assignment</Label>
-            <Select value={cfg.UNASSIGNED || "image"} onChange={(e) => set("UNASSIGNED", e.target.value)}>
+            <Select value={cfg.UNASSIGNED || "image"} onChange={(e) => setUnassigned(e.target.value)}>
               <option value="image">Image them with the default image above</option>
               <option value="hold">Hold — discover only, do not touch their disks</option>
             </Select>
             <p className="mt-2 text-xs text-zinc-500">
               {cfg.UNASSIGNED === "hold" ? (
                 <>Unknown machines will show their MAC and retry every {cfg.RETRY_SECONDS || 30}s
-                without writing anything. Power on the fleet, let them appear below, assign
+                without writing anything. Power on the fleet, let them appear above, assign
                 images, and each machine picks its assignment up on its next retry — no second
-                power cycle. Save the configuration to apply this.</>
+                power cycle.</>
               ) : (
                 <>Any machine that PXE-boots gets imaged immediately, including one you have not
                 assigned yet. Switch to <em>Hold</em> to discover MACs safely first.</>
               )}
+              {" "}Saved as soon as you choose it.
+              {running && <span className="text-amber-400"> Restart the server to apply it
+                to machines booting now.</span>}
             </p>
           </div>
           {assign.length === 0 ? (
