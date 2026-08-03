@@ -612,7 +612,8 @@ fi
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
          "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
          "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
-         "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh"
+         "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh" \
+         "$MNT/usr/local/sbin/ab-kernel-hook.sh"
 # The others are only ever run by systemd; this one is run by a person, so it
 # gets a name without the extension and a place on the default PATH.
 ln -sf ab-overlay-diff.sh "$MNT/usr/local/sbin/ab-overlay-diff"
@@ -638,6 +639,45 @@ cat > "$MNT/etc/motd" <<'MOTD'
     "Recovery: Slot A|B, no overlay"      boot the image exactly as written
 
 MOTD
+
+# --- keep apt from destroying the A/B boot configuration --------------------
+#
+# grub.cfg here is written by this builder and understood by RAUC: slot order,
+# try counters, per-slot kernels, the recovery entries. update-grub regenerates
+# it from /etc/grub.d and knows about none of that, and Debian calls update-grub
+# from /etc/kernel/postinst.d/zz-update-grub on every kernel install and from
+# the grub packages own postinst on upgrade. One "apt upgrade" that pulls a
+# kernel would therefore replace the A/B configuration with a generic one --
+# no rauc.slot=, no slot selection, no recovery entries -- and the machine would
+# come up, if at all, with A/B silently dead.
+#
+# Diverting the binary covers every caller at once, which grubbing about in
+# individual hooks does not: kernel hooks, package postinsts, and anyone typing
+# it by hand all get the same answer.
+mkdir -p "$MNT/usr/local/sbin"
+chroot "$MNT" dpkg-divert --local --rename --add /usr/sbin/update-grub >/dev/null
+cat > "$MNT/usr/sbin/update-grub" <<'NOGRUB'
+#!/bin/sh
+# Deliberately does nothing. This is an A/B image: /boot/grub/grub.cfg is part
+# of the image and is replaced by re-imaging, not regenerated on the machine.
+# Regenerating it would drop slot selection, the rauc.slot= parameters and the
+# recovery entries, leaving a machine that boots -- until you need to roll back.
+#
+# The real one is still there as /usr/sbin/update-grub.distrib if you genuinely
+# need it, but expect to re-image afterwards.
+echo "update-grub: skipped; this is an A/B image whose grub.cfg is managed by the image." >&2
+exit 0
+NOGRUB
+chmod 0755 "$MNT/usr/sbin/update-grub"
+
+# A kernel installed by apt is inert here -- GRUB boots the slot's own copy,
+# which only a bundle replaces. The hook does not wire the two together on
+# purpose: a kernel swapped in underneath a running slot would no longer match
+# the root filesystem it was built against. It says so instead, because the
+# alternative is a machine that reboots on the old kernel with no explanation.
+install -m0755 "$OVERLAY_DIR/usr/local/sbin/ab-kernel-hook.sh" \
+    "$MNT/etc/kernel/postinst.d/zz-ab-kernel-notice"
+
 chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service \
                                 machine-identity.service ab-checkin.service
 

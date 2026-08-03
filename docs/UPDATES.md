@@ -112,6 +112,40 @@ asking for a passphrase.
 **Still not updated by a bundle:** `grub.cfg` itself, the GRUB binaries in the
 ESP, and the partition layout. Changing those needs a re-image.
 
+## apt on a deployed machine
+
+apt works normally. Nothing is held, pinned, or blocked, and packages install
+the way they do anywhere else. Two things behave differently, both about the
+boot path:
+
+- **`update-grub` does nothing.** It is diverted to a no-op, because
+  regenerating `grub.cfg` from `/etc/grub.d` would drop slot selection, the
+  `rauc.slot=` parameters and the recovery entries — turning a working machine
+  into one that boots until the first time you need to roll back. Debian calls
+  `update-grub` from the kernel postinst and from the grub packages' own
+  postinst, so a single `apt upgrade` would otherwise do it. The original is
+  kept as `/usr/sbin/update-grub.distrib`.
+- **A kernel installed by apt is never booted.** It lands at
+  `/boot/vmlinuz-<version>`; GRUB boots `/boot/<A|B>/vmlinuz`, which only a
+  bundle replaces. The install succeeds and prints a notice saying so. Changing
+  the kernel means building a new image and shipping it as a bundle — a kernel
+  swapped in underneath a running slot would no longer match the root filesystem
+  it was built against, and the rollback slot would be all that stood between
+  you and an unbootable machine.
+
+### Packages do not survive an update
+
+More important than either: **anything installed with apt is removed by the next
+A/B update.** The root filesystem is an overlay, so apt's changes land in the
+machine's upper layer — and on a slot change the OS-owned paths (`/usr`, `/bin`,
+`/lib`, dpkg's and apt's state) are cleared, because a package database from the
+old release shadowing the new one is how an update silently half-applies.
+
+So apt is fine for looking around, debugging, or something temporary. For
+software that should persist, put it in the image: `--packages` at build time,
+or `overlay.d/` and `--run-script` (see [BUILDER.md](BUILDER.md)). Machine state
+outside those paths — `/home`, `/etc`, `/srv`, `/opt`, logs — is kept.
+
 ## Watching a rollout
 
 The **Fleet** page lists every machine this server has imaged, what it is
