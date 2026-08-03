@@ -80,11 +80,14 @@ async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
 
 
 @router.post("/imager/build")
-async def start_imager(_: str = Depends(require_auth)):
+async def start_imager(body: dict = Body(default={}), _: str = Depends(require_auth)):
     _require_ready()
     if jobs.running(type="imager"):
         raise HTTPException(409, "An imager build is already running")
-    cmd, label = orch.build_imager_cmd()
+    arch = str(body.get("arch") or "amd64")
+    if arch not in _ARCHES:
+        raise HTTPException(400, f"arch must be one of {', '.join(_ARCHES)}")
+    cmd, label = orch.build_imager_cmd(arch)
     job = await jobs.start(type="imager", label=label, cmd=cmd, now=orch.now())
     return job.public()
 

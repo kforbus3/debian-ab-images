@@ -1,13 +1,23 @@
 #!/bin/bash
 #
 # Build the netboot imager: a kernel + initramfs that auto-images a machine's
-# local disk from an HTTP image URL. Outputs to /output/imager/{vmlinuz,initramfs.img}.
+# local disk from an HTTP image URL.
+#
+# amd64 goes to /output/imager/{vmlinuz,initramfs.img} and every other
+# architecture to /output/imager/<arch>/. amd64 keeps the top-level path it has
+# always had so that servers and images already deployed keep working; nothing
+# has to be rebuilt or moved to gain arm64 support. boot.ipxe picks the right
+# directory from iPXE's own ${buildarch}, so the machine chooses, not the config.
 #
 # Runs inside the imager builder container (see Dockerfile).
 set -euo pipefail
 
 ARCH="${ARCH:-amd64}"
-OUT="${OUT:-/output/imager}"
+case "$ARCH" in
+    amd64) OUT="${OUT:-/output/imager}";;
+    arm64) OUT="${OUT:-/output/imager/arm64}";;
+    *) echo "[imager-build] unsupported ARCH '$ARCH' (expected amd64 or arm64)" >&2; exit 2;;
+esac
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 log() { echo -e "\033[0;32m[imager-build]\033[0m $*"; }

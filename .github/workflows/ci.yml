@@ -1,0 +1,192 @@
+name: CI
+
+# Fast checks on every push, and the slow boot tests once a night.
+#
+# The split is deliberate. Everything in `checks` runs in about a minute and
+# catches the class of bug that has actually bitten this project: a router
+# imported but never mounted, so its endpoints 404 while the frontend still
+# typechecks clean; a shell script whose quoting breaks only under bash; an
+# initramfs script that is not valid POSIX sh. The boot tests catch the rest,
+# but they need privileges, loop devices and several minutes per boot, which is
+# the wrong trade for every push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"      # nightly boot tests
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          fail=0
+          # Two parsers on purpose: the initramfs and container entrypoints run
+          # under dash, and constructs bash accepts are not always POSIX (and
+          # vice versa -- an apostrophe inside ${VAR:?...} parses under dash and
+          # not under bash, which is how one shipped unnoticed).
+          while IFS= read -r f; do
+            head -1 "$f" | grep -q 'bin/bash' && parser=bash || parser=sh
+            "$parser" -n "$f" || { echo "::error file=$f::$parser -n failed"; fail=1; }
+          done < <(find . -name '*.sh' -not -path './node_modules/*' \
+                          -o -path './imager/init' \
+                          -o -path './builder/overlay/etc/initramfs-tools/*' -type f)
+          exit $fail
+
+      - name: No command substitution inside the chroot heredoc
+        run: |
+          # build-image.sh writes the in-chroot script with an UNQUOTED heredoc,
+          # so ${...} interpolates the builder's variables on purpose -- and
+          # backticks or $(...) execute in the builder, which is never intended.
+          # A pair of backticks around a package name in a comment once ran that
+          # package name as a command and broke the build.
+          awk '/^cat > "\$MNT\/tmp\/setup.sh" <<CHROOT$/{h=1;next} h&&/^CHROOT$/{h=0} h' \
+            builder/build-image.sh > /tmp/heredoc.txt
+          if [ ! -s /tmp/heredoc.txt ]; then
+            echo "::error::could not find the chroot heredoc — has it been renamed?"; exit 1
+          fi
+          if grep -n '`' /tmp/heredoc.txt; then
+            echo "::error::backticks inside the unquoted chroot heredoc execute in the builder"; exit 1
+          fi
+          if grep -nE '\$\(' /tmp/heredoc.txt; then
+            echo "::error::\$( ) inside the unquoted chroot heredoc executes in the builder"; exit 1
+          fi
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # Advisory: this is a large existing codebase and the point is to stop
+          # new problems, not to gate on a backlog of style findings.
+          find . -name '*.sh' -not -path './node_modules/*' -print0 \
+            | xargs -0 shellcheck -S error || true
+
+      - name: Frontend typecheck and build
+        working-directory: webui/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npm run build
+
+      - name: Backend imports and routes
+        working-directory: webui/backend
+        run: |
+          python -m pip install -q -r requirements.txt httpx
+          python - <<'PY'
+          import os, pkgutil, sys
+          os.environ.setdefault("STATIC_DIR", "/tmp/none")
+          os.environ.setdefault("ADMIN_PASSWORD", "ci")
+          os.environ.setdefault("SECRET_KEY", "ci-secret-key-not-used-anywhere")
+          from fastapi.testclient import TestClient
+          from app.main import app
+          from app import routers
+
+          client = TestClient(app)
+          paths = {r.path for r in app.routes if getattr(r, "path", "").startswith("/api")}
+
+          # Every router module must actually be mounted. A router that is
+          # imported but left out of the app answers 404 with a body that reads
+          # like a legitimate "not found", which is indistinguishable from a
+          # working endpoint returning nothing -- it shipped once already.
+          missing = []
+          for m in pkgutil.iter_modules(routers.__path__):
+              mod = __import__(f"app.routers.{m.name}", fromlist=["router"])
+              r = getattr(mod, "router", None)
+              if r is None:
+                  continue
+              for route in r.routes:
+                  if "/api" + route.path not in paths:
+                      missing.append(f"{m.name}: {route.path}")
+          if missing:
+              print("Routers not mounted:", *missing, sep="\n  ")
+              sys.exit(1)
+
+          assert client.get("/api/health").status_code == 200, "health check failed"
+          # Endpoints that take reports from machines are deliberately open;
+          # everything else must refuse an unauthenticated caller.
+          for path in ("/api/imaging", "/api/deployments", "/api/images", "/api/bundles"):
+              code = client.get(path).status_code
+              assert code == 401, f"{path} returned {code}, expected 401"
+          r = client.post("/api/imaging/report", data={"id": "aa:bb:cc:dd:ee:ff", "phase": "writing"})
+          assert r.status_code == 200, f"imager report rejected: {r.status_code}"
+          r = client.post("/api/imaging/checkin", data={"id": "aa:bb:cc:dd:ee:ff"})
+          assert r.status_code == 200, f"checkin rejected: {r.status_code}"
+          print(f"OK: {len(paths)} API routes, all routers mounted")
+          PY
+
+      - name: Provisioning config renders for every architecture
+        run: |
+          # dnsmasq must hand an arm64 machine an arm64 bootloader; getting this
+          # wrong is silent, and shows up as a machine that PXE-boots to nothing.
+          docker build -t ci-dnsmasq server/dnsmasq
+          docker run --rm -e SERVER_IP=10.0.0.1 -e MODE=dhcp -e INTERFACE=eth0 \
+            -e DHCP_RANGE_START=10.0.0.10 -e DHCP_RANGE_END=10.0.0.99 \
+            --entrypoint sh ci-dnsmasq -c 'ls /srv/tftp' | tee /tmp/tftp.txt
+          for f in undionly.kpxe ipxe.efi ipxe-arm64.efi; do
+            grep -qx "$f" /tmp/tftp.txt || { echo "::error::$f missing from the TFTP root"; exit 1; }
+          done
+
+  boot-tests:
+    name: Boot tests
+    # Only nightly or on request: each of these builds a real image and boots it
+    # under QEMU. On an x86_64 runner the amd64 build is native, so this is far
+    # faster here than on a developer's arm64 laptop.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build an image
+        run: |
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname ci --username ci --password ci --image-size 8 \
+            --compress none --encrypt --unlock keyfile --luks-passphrase testluks \
+            --output /output/ovl-test.img
+
+      - name: Root overlay boots and /home gets the whole disk
+        run: |
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-overlay-boot.sh | tee boot.log
+          grep -q "root-fstype: overlay" boot.log || { echo "::error::root is not an overlay"; exit 1; }
+
+      - name: Recovery resets the overlay without destroying it
+        run: |
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-overlay-recovery.sh | tee rec.log
+          grep -q "upper layer set aside" rec.log || { echo "::error::reset did not run"; exit 1; }
+          grep -q "prev-added:   present" rec.log || { echo "::error::reset destroyed the old upper layer"; exit 1; }
+
+      - name: An update bundle installs and the machine boots the other slot
+        run: |
+          # Unencrypted source: bundling from a LUKS image is not supported, and
+          # this also generates the signing key the image below has to trust.
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname bundlesrc --username ci --password ci --image-size 8 \
+            --compress none --output /output/bundle-src.img
+          docker run --rm --privileged -v "$PWD/output":/output \
+            --entrypoint /build/make-bundle.sh debian-ab-builder:amd64 \
+            --image /output/bundle-src.img --version ci
+          # Rebuilt so the signing certificate generated above is inside it --
+          # a machine cannot be updated by a key it was not built to trust.
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname updtest --username ci --password ci --image-size 8 \
+            --compress none --output /output/upd-test.img
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh | tee upd.log
+          grep -q "PASS:" upd.log || { echo "::error::update did not complete"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-logs
+          path: |
+            boot.log
+            rec.log
+            output/*.log

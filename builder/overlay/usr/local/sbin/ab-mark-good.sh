@@ -30,5 +30,8 @@ if [ ! -s "$GRUBENV" ]; then
     exit 0
 fi
 
-grub-editenv "$GRUBENV" set "${SLOT}_TRY=0"
+# _OK as well as _TRY: the try counter is what GRUB falls back on, and _OK is
+# what RAUC reads to decide whether a slot is usable at all. Setting only the
+# counter leaves RAUC convinced every slot is bad.
+grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1"
 echo "ab-mark-good: slot $SLOT marked good (${SLOT}_TRY=0)"

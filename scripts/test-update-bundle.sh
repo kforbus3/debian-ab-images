@@ -1,0 +1,165 @@
+#!/bin/bash
+# Install a RAUC update bundle on a booted machine, and prove the slot flipped.
+#
+# Building a bundle proves nothing on its own: it has to be signed by a key the
+# image trusts, carry a matching `compatible`, and land in the slot the machine
+# is not running on. All three fail independently and only the running machine
+# can tell you.
+#
+# Boot 1: running slot A, install the bundle, report what rauc thinks.
+# Boot 2: the machine should now be on slot B, with slot A still intact.
+#
+# The bundle is served to the guest over QEMU's user networking (the host is
+# 10.0.2.2 from inside), so nothing outside this container is involved.
+#
+#   docker run --rm --privileged --platform=linux/amd64 \
+#       -v "$PWD/output":/output -v "$PWD/scripts":/s \
+#       --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh
+set -u
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1
+apt-get install -y -qq qemu-system-x86 gdisk util-linux busybox >/dev/null 2>&1
+
+SRC="${SRC:-/output/upd-test.img}"
+DISK="${DISK:-/output/update-target.img}"
+BUNDLE="${BUNDLE:-}"
+SIZE="${SIZE:-32G}"
+PORT=8000
+
+fail() { echo "HARNESS-FAIL: $*"; exit 1; }
+[ -f "$SRC" ] || fail "no $SRC"
+
+if [ -z "$BUNDLE" ]; then
+    BUNDLE="$(ls -t /output/bundles/*.raucb 2>/dev/null | head -1)"
+fi
+[ -n "$BUNDLE" ] && [ -f "$BUNDLE" ] || fail "no bundle in /output/bundles"
+echo "  bundle: $(basename "$BUNDLE")"
+
+rm -f "$DISK"
+truncate -s "$SIZE" "$DISK"
+dd if="$SRC" of="$DISK" bs=4M conv=notrunc status=none || fail "dd"
+
+# --- the imager's post-write steps -------------------------------------------
+sgdisk -e "$DISK" >/dev/null 2>&1
+NUM=$(sgdisk -p "$DISK" 2>/dev/null | awk '$NF == "overlay" { print $1; exit }')
+START=$(sgdisk -i "$NUM" "$DISK" 2>/dev/null | awk '/First sector/ { print $3; exit }')
+TYPEG=$(sgdisk -i "$NUM" "$DISK" 2>/dev/null | awk '/Partition GUID code/ { print $4; exit }')
+UNIQG=$(sgdisk -i "$NUM" "$DISK" 2>/dev/null | awk '/Partition unique GUID/ { print $4; exit }')
+sgdisk -d "$NUM" -n "${NUM}:${START}:0" -t "${NUM}:${TYPEG}" \
+       -u "${NUM}:${UNIQG}" -c "${NUM}:overlay" "$DISK" >/dev/null 2>&1 || fail "grow"
+
+LO=$(losetup -f --show -P "$DISK") || fail "losetup"
+BB=$(basename "$LO")
+for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
+    IFS=: read -r mj mn < "/sys/class/block/${BB}p$n/dev"
+    rm -f "/dev/${BB}p$n"; mknod "/dev/${BB}p$n" b "$mj" "$mn"
+done
+
+# --- install a probe into slot A ---------------------------------------------
+ROOTP=""
+mkdir -p /mnt/slot /mnt/boot
+for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
+    mount "/dev/${BB}p$n" /mnt/slot 2>/dev/null || continue
+    if [ -d /mnt/slot/etc/rauc ] && [ -d /mnt/slot/usr/local/sbin ]; then ROOTP="$n"; break; fi
+    umount /mnt/slot
+done
+[ -n "$ROOTP" ] || fail "no root slot found"
+
+cat > /mnt/slot/usr/local/sbin/ab-update-probe.sh <<PROBE
+#!/bin/sh
+exec > /dev/console 2>&1
+echo "AB-UPDATE-PROBE-START"
+echo "booted-slot:  \$(sed -n 's/.*rauc.slot=\([AB]\).*/\1/p' /proc/cmdline)"
+echo "keyring:      \$(openssl x509 -in /etc/rauc/keyring.pem -noout -subject 2>/dev/null || echo 'not a single certificate')"
+if [ -f /var/lib/ab-update-done ]; then
+    echo "phase:        second boot (after update)"
+    echo "--- rauc status ---"
+    rauc status 2>&1 | head -20
+else
+    echo "phase:        first boot (installing)"
+    touch /var/lib/ab-update-done
+    echo "--- rauc status before ---"
+    rauc status 2>&1 | head -12
+    echo "--- installing ---"
+    ab-update "http://10.0.2.2:${PORT}/bundles/$(basename "$BUNDLE")" 2>&1 | tail -20
+    echo "--- rauc status after ---"
+    rauc status 2>&1 | head -20
+fi
+echo "AB-UPDATE-PROBE-END"
+systemctl poweroff --no-block
+PROBE
+chmod 0755 /mnt/slot/usr/local/sbin/ab-update-probe.sh
+
+cat > /mnt/slot/etc/systemd/system/ab-update-probe.service <<'UNIT'
+[Unit]
+Description=Install an update bundle and report, then power off
+After=multi-user.target network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ab-update-probe.sh
+TimeoutStartSec=600
+[Install]
+WantedBy=multi-user.target
+UNIT
+mkdir -p /mnt/slot/etc/systemd/system/multi-user.target.wants
+ln -sf /etc/systemd/system/ab-update-probe.service \
+   /mnt/slot/etc/systemd/system/multi-user.target.wants/ab-update-probe.service
+
+# The guest gets its address from QEMU's built-in DHCP; the image uses
+# systemd-networkd, which needs to be told to accept it on the virtio NIC.
+mkdir -p /mnt/slot/etc/systemd/network
+cat > /mnt/slot/etc/systemd/network/20-dhcp.network <<'NET'
+[Match]
+Name=en*
+[Network]
+DHCP=yes
+NET
+sync; umount /mnt/slot
+
+mount "/dev/${BB}p3" /mnt/boot 2>/dev/null && {
+    sed -i 's/ quiet//g; s/^set timeout=.*/set timeout=1/' /mnt/boot/grub/grub.cfg
+    umount /mnt/boot
+}
+losetup -d "$LO"
+
+# --- serve the bundle to the guest -------------------------------------------
+busybox httpd -p "$PORT" -h /output &
+HTTPD=$!
+trap 'kill $HTTPD 2>/dev/null' EXIT
+sleep 1
+
+boot() {
+    echo ""
+    echo "=== boot: $1 ==="
+    timeout 900 qemu-system-x86_64 -m 2048 -smp 2 \
+        -drive file="$DISK",format=raw,if=virtio \
+        -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+        -nographic -serial mon:stdio -no-reboot > "/output/update-$1.log" 2>&1
+    sed -n '/AB-UPDATE-PROBE-START/,/AB-UPDATE-PROBE-END/p' "/output/update-$1.log" \
+        | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | sed 's/^/  /'
+}
+
+boot install
+boot after-reboot
+
+# The probe lives in slot A. After a successful update the machine boots slot B,
+# whose contents came from the bundle -- so the probe is NOT there, and its
+# absence is the point rather than a failure. What proves the update is that
+# slot B boots at all and identifies itself as the bundle's image.
+echo ""
+echo "=== result ==="
+AFTER=/output/update-after-reboot.log
+ok=1
+grep -qa "Slot B (rootfs.1)" "$AFTER" || { echo "  FAIL: GRUB did not select slot B"; ok=0; }
+grep -qa "does not exist" "$AFTER" && {
+    echo "  FAIL: slot B has no filesystem label — the post-install hook did not run"; ok=0; }
+grep -qa "Welcome to" "$AFTER" || { echo "  FAIL: slot B did not reach userspace"; ok=0; }
+grep -qa "ab-mark-good" "$AFTER" || echo "  WARN: ab-mark-good did not run in slot B"
+if [ "$ok" = 1 ]; then
+    echo "  PASS: installed on slot A, rebooted into slot B, and slot B came up"
+    echo "  slot B identifies as: $(grep -a "login:" "$AFTER" | tail -1 | sed "s/ login:.*//;s/^ *//")"
+else
+    echo "  see $AFTER"
+    exit 1
+fi

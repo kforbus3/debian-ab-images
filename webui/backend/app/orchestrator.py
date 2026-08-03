@@ -250,7 +250,29 @@ def preflight() -> list[str]:
             "The Docker socket is not available at /var/run/docker.sock. The web UI "
             "needs it to run the builder; check the volume in webui/docker-compose.yml."
         )
+    # Images are several GiB each and nothing removes them, so an output
+    # directory that has been in use for a while is the most likely reason a
+    # build dies -- and it dies late, after debootstrap, with a bare "No space
+    # left on device" that says nothing about which disk. Say it up front.
+    try:
+        du = disk_usage()
+        free_gb = du["free"] / (1024 ** 3)
+        if free_gb < LOW_DISK_GB:
+            artifacts_gb = du["artifacts"] / (1024 ** 3)
+            problems.append(
+                f"Only {free_gb:.1f} GiB free where images are written, and a build "
+                f"needs roughly {LOW_DISK_GB:.0f} GiB. Built images account for "
+                f"{artifacts_gb:.1f} GiB — delete ones you no longer need on the "
+                "Images page."
+            )
+    except OSError:
+        pass
     return problems
+
+
+# A build writes an 8 GiB image and unpacks a distribution alongside it, and
+# Docker's own layers land on the same volume. Below this, builds usually fail.
+LOW_DISK_GB = 12.0
 
 
 # --------------------------- builds ---------------------------
@@ -307,17 +329,30 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     return ["bash", "-c", script], label, env
 
 
-def build_imager_cmd() -> tuple[list[str], str]:
+def build_imager_cmd(arch: str = "amd64") -> tuple[list[str], str]:
+    """Build the netboot imager for one architecture.
+
+    The imager is a kernel the target machine executes, so an amd64 imager
+    cannot boot an arm64 machine however it is served -- building an arm64
+    image is only half of supporting arm64, and this is the other half.
+    """
+    if arch not in ("amd64", "arm64"):
+        raise ValueError(f"unsupported imager arch '{arch}'")
+    platform = f"linux/{arch}"
+    kernel_pkg = f"linux-image-{arch}"
     script = (
-        _docker_build("imager", "debian-ab-imager")
-        + "echo '--- building imager ---'\n"
+        _docker_build("imager", f"debian-ab-imager:{arch}", platform,
+                      build_args=f"--build-arg KERNEL_PKG={kernel_pkg}")
+        + f"echo '--- building {arch} imager ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
-        + f"--platform=linux/amd64 -v {_q(host_output_dir())}:/output debian-ab-imager\n"
+        + f"--platform={platform} -e ARCH={arch} "
+        + f"-v {_q(host_output_dir())}:/output debian-ab-imager:{arch}\n"
     )
-    return ["bash", "-c", script], "Build netboot imager"
+    return ["bash", "-c", script], f"Build netboot imager ({arch})"
 
 
-def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64") -> str:
+def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64",
+                  build_args: str = "") -> str:
     """Shell prelude that builds one of the repo's images.
 
     The build CONTEXT is a path inside this container (the docker CLI tars it up
@@ -329,7 +364,8 @@ def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64") -> str:
     return (
         "set -eo pipefail\n"
         f"echo '--- building {subdir} image ---'\n"
-        f"docker build --progress=plain --platform={platform} -t {tag} {_q(PROJ + '/' + subdir)}\n"
+        f"docker build --progress=plain --platform={platform} "
+        f"{build_args + ' ' if build_args else ''}-t {tag} {_q(PROJ + '/' + subdir)}\n"
     )
 
 
@@ -368,10 +404,74 @@ def list_images() -> tuple[list[dict], bool]:
                     "created": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
                     **_sidecars(full),
                 })
-    imager_dir = os.path.join(out, "imager")
-    imager_ready = os.path.isfile(os.path.join(imager_dir, "vmlinuz")) and \
-        os.path.isfile(os.path.join(imager_dir, "initramfs.img"))
+    imager_ready = imager_arches()["amd64"]
     return items, imager_ready
+
+
+def build_bundle_cmd(image: str, version: str = "", description: str = "") -> tuple[list[str], str]:
+    """Package a built image into a signed RAUC update bundle.
+
+    Runs the builder container with its make-bundle entrypoint. Privileged for
+    the same reason the image build is: it attaches the image to a loop device
+    and mounts the root slot out of it.
+    """
+    args = ["--image", f"/output/{image}"]
+    if version:
+        args += ["--version", version]
+    if description:
+        args += ["--description", description]
+    script = (
+        _docker_build("builder", "debian-ab-builder:amd64")
+        + "echo '--- building update bundle ---'\n"
+        + f"docker run --rm --name {container_name(JOB_TOKEN)} "
+        + "--privileged --platform=linux/amd64 "
+        + f"-v {_q(host_output_dir())}:/output "
+        + "--entrypoint /build/make-bundle.sh debian-ab-builder:amd64 "
+        + " ".join(_q(a) for a in args) + "\n"
+    )
+    return ["bash", "-c", script], f"Build update bundle from {image}"
+
+
+def list_bundles() -> list[dict]:
+    """Update bundles available to install, newest first."""
+    d = os.path.join(settings.output_dir, "bundles")
+    items: list[dict] = []
+    if not os.path.isdir(d):
+        return items
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".raucb"):
+            continue
+        full = os.path.join(d, fn)
+        st = os.stat(full)
+        row = {
+            "name": fn,
+            "size": st.st_size,
+            "created": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            with open(full + ".json") as f:
+                row.update(json.load(f))
+        except (OSError, ValueError):
+            pass
+        items.append(row)
+    items.sort(key=lambda r: r["created"], reverse=True)
+    return items
+
+
+def imager_arches() -> dict[str, bool]:
+    """Which architectures have a netboot imager built.
+
+    amd64 lives at the top of the imager directory, where it always has, so a
+    server that predates arm64 support keeps working untouched; other
+    architectures get a subdirectory. A machine picks its own at boot time from
+    iPXE's ${buildarch}, so both can be present and neither interferes.
+    """
+    out = settings.output_dir
+    def built(d: str) -> bool:
+        return os.path.isfile(os.path.join(d, "vmlinuz")) and \
+               os.path.isfile(os.path.join(d, "initramfs.img"))
+    base = os.path.join(out, "imager")
+    return {"amd64": built(base), "arm64": built(os.path.join(base, "arm64"))}
 
 
 def delete_image(name: str) -> None:

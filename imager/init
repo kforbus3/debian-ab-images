@@ -253,6 +253,34 @@ grow_overlay || true
 # Re-read the partition table so the kernel sees the new layout.
 $BB blockdev --rereadpt "$TARGET" 2>/dev/null || true
 
+# --- leave the machine a way to report that it booted ------------------------
+#
+# Everything up to here is reported by the imager, and the last of it is sent
+# before the reboot -- so a machine that images perfectly and then fails to boot
+# looks exactly like one that worked. The machine has to say so itself, and
+# after the reboot it no longer has a kernel command line telling it where the
+# server is.
+#
+# So the address is left on the BOOT partition, which is plain ext4 (the root
+# slots may be LUKS, and the overlay certainly is) and is mounted at /boot by
+# the installed system. ab-checkin.service reads it on the next boot.
+leave_checkin_marker() {
+    [ -n "$REPORT_URL" ] || return 0
+    _url="$(echo "$REPORT_URL" | $BB sed 's|/report$|/checkin|')"
+    _num="$(/usr/sbin/sgdisk -p "$TARGET" 2>/dev/null | $BB awk '$NF == "BOOT" { print $1; exit }')"
+    [ -n "$_num" ] || return 0
+    _part="${TARGET}${_num}"
+    [ -b "$_part" ] || _part="${TARGET}p${_num}"
+    [ -b "$_part" ] || return 0
+    $BB mkdir -p /mnt/bootpart 2>/dev/null || return 0
+    $BB mount -t ext4 "$_part" /mnt/bootpart 2>/dev/null || return 0
+    printf '{"checkin_url":"%s","image":"%s","id":"%s"}\n' \
+        "$_url" "$IMG_URL" "$CLIENT_ID" > /mnt/bootpart/ab-deploy.json 2>/dev/null || true
+    $BB sync
+    $BB umount /mnt/bootpart 2>/dev/null || true
+}
+leave_checkin_marker || true
+
 report done 100 ""
 # The reports are backgrounded; give them a moment to leave before the machine
 # powers off, or the UI would keep showing it as writing until it times out.

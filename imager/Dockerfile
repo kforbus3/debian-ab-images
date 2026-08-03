@@ -1,8 +1,12 @@
 # Imager builder: produces the netboot kernel + initramfs.
 FROM debian:trixie-slim
 
+# The kernel package has to match the architecture this container is built for:
+# the imager is a kernel + initramfs the target machine executes, so an amd64
+# imager is unbootable on an arm64 machine no matter how it is served.
+ARG KERNEL_PKG=linux-image-amd64
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        linux-image-amd64 \
+        ${KERNEL_PKG} \
         busybox-static \
         gdisk \
         zstd \

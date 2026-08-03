@@ -13,7 +13,10 @@ router = APIRouter(prefix="/images", tags=["images"])
 @router.get("")
 async def list_images(_: str = Depends(require_auth)):
     items, imager_ready = orch.list_images()
-    return {"images": items, "imager_ready": imager_ready}
+    # imager_ready stays amd64-only for compatibility with anything already
+    # reading it; imager_arches says which architectures can actually netboot.
+    return {"images": items, "imager_ready": imager_ready,
+            "imager_arches": orch.imager_arches()}
 
 
 @router.get("/disk")

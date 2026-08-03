@@ -30,3 +30,8 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# Update signing key. The certificate is baked into every image built after it
+# exists, so this pair must be kept — and must not be committed: anyone holding
+# key.pem can sign an update the whole fleet will install.
+output/rauc-keys/

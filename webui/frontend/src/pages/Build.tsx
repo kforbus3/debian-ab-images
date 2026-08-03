@@ -31,11 +31,16 @@ export default function Build() {
   const [jobId, setJobId] = useState<string>("");
   const [problems, setProblems] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ step: number; total: number; label: string } | null>(null);
+  const [imagerArches, setImagerArches] = useState<Record<string, boolean> | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  const loadImagerArches = () =>
+    api.get("/images").then((r) => setImagerArches(r.data.imager_arches || null)).catch(() => {});
 
   useEffect(() => () => esRef.current?.close(), []);
   useEffect(() => {
     api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
+    loadImagerArches();
     // Builds run for many minutes, so navigating away or reloading must not lose
     // the live log — reattach to whatever build is still running. The stream
     // replays the job's backlog before going live, so nothing is missed.
@@ -64,9 +69,15 @@ export default function Build() {
     try { const { data } = await api.post("/builds", opts); await stream(data.id); }
     catch (e) { toast.error(apiError(e)); }
   }
+  // The imager is built for the architecture selected above, because it is a
+  // kernel the target machine runs: an amd64 imager cannot netboot an arm64
+  // machine, so building an arm64 image without one leaves it undeployable.
   async function startImager() {
-    try { const { data } = await api.post("/imager/build"); await stream(data.id); }
-    catch (e) { toast.error(apiError(e)); }
+    try {
+      const { data } = await api.post("/imager/build", { arch: opts.arch });
+      await stream(data.id);
+      loadImagerArches();
+    } catch (e) { toast.error(apiError(e)); }
   }
   async function cancel() {
     try { await api.post(`/jobs/${jobId}/cancel`); toast.success("Cancel requested"); }
@@ -92,8 +103,20 @@ export default function Build() {
   return (
     <div>
       <PageHeader title="Build Image" subtitle="Produce a bootable Debian or Ubuntu A/B image" actions={
-        <Button variant="secondary" onClick={startImager} disabled={running}><Cpu size={15} /> Build netboot imager</Button>
+        <Button variant="secondary" onClick={startImager} disabled={running}>
+          <Cpu size={15} /> Build {opts.arch} netboot imager
+        </Button>
       } />
+      {/* An arm64 image is undeployable without an arm64 imager, and the only
+          symptom is a machine that PXE-boots into nothing — so say it here,
+          next to the button that fixes it, rather than leaving it to be found. */}
+      {imagerArches && !imagerArches[opts.arch] && (
+        <Alert title={`No ${opts.arch} netboot imager has been built`} items={[
+          `Machines cannot be imaged over the network for ${opts.arch} until one exists — ` +
+          `the imager is a kernel the machine itself runs, so it has to match. ` +
+          `Use "Build ${opts.arch} netboot imager" above. Images built here can still be written to a disk directly.`,
+        ]} />
+      )}
       <Alert title="Builds cannot run yet" items={problems} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">

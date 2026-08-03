@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gzip \
         grub-common \
         ca-certificates \
+        rauc \
+        squashfs-tools \
+        openssl \
         qemu-user-static \
         binfmt-support \
         kmod \
@@ -36,9 +39,9 @@ RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/sbin/udevadm \
     && chmod +x /usr/local/sbin/udevadm
 
 WORKDIR /build
-COPY build-image.sh /build/build-image.sh
+COPY build-image.sh make-bundle.sh /build/
 COPY overlay /build/overlay
-RUN chmod +x /build/build-image.sh
+RUN chmod +x /build/build-image.sh /build/make-bundle.sh
 
 VOLUME /output
 ENTRYPOINT ["/build/build-image.sh"]

@@ -123,7 +123,7 @@ if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
 fi
 [ -n "$SLOT" ] && { printf '%s\n' "$SLOT" > /ab-rw/.slot 2>/dev/null || true; }
 
-mkdir -p /ab-rw/upper /ab-rw/work /ab-rw/persistent 2>/dev/null || true
+mkdir -p /ab-rw/upper /ab-rw/work 2>/dev/null || true
 
 # Every option goes before the device. klibc's mount parses with getopt, which
 # stops at the first non-option argument: with the device first, the trailing

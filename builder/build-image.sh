@@ -362,7 +362,10 @@ mount --bind /dev/pts "$MNT/dev/pts"
 mount -t proc proc "$MNT/proc"
 mount -t sysfs sys "$MNT/sys"
 
-mkdir -p "$MNT/var/lib/overlay/upper" "$MNT/var/lib/overlay/work" "$MNT/var/lib/overlay/persistent"
+# upper and work are the overlay root's two layers. There is no third
+# directory: a "persistent" one was created here and never used by anything,
+# which read as a supported place to put data that nothing would have kept.
+mkdir -p "$MNT/var/lib/overlay/upper" "$MNT/var/lib/overlay/work"
 
 step "Writing base configuration"
 echo "$HOSTNAME_" > "$MNT/etc/hostname"
@@ -465,9 +468,26 @@ apt-get update
 # recommend it, and without it no initrd.img is generated for GRUB to load.
 apt-get install -y --no-install-recommends \
     ${KERNEL_PKG} initramfs-tools ${GRUB_PKGS} \
-    openssh-server sudo ca-certificates \
+    openssh-server sudo ca-certificates curl \
     ${RESOLVED_PKG} cloud-guest-utils gdisk parted e2fsprogs \
     rauc ${CRYPT_PACKAGES} ${EXTRA_PACKAGES}
+
+# Debian splits RAUC in two: the rauc package is the command, rauc-service is
+# the D-Bus service it talks to. With only the former, "rauc install" and
+# "rauc status" both fail with "de.pengutronix.rauc was not provided by any
+# .service files" -- so the machine can never be updated, and nothing says why
+# until someone tries. Best-effort because not every suite packages it
+# separately; where it does not, the service is part of the rauc package.
+#
+# No backticks anywhere in this block: the heredoc below is unquoted, so they
+# would be command substitution executed by the builder, not text.
+if apt-cache show rauc-service >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends rauc-service
+fi
+if [ ! -e /usr/share/dbus-1/system-services/de.pengutronix.rauc.service ]; then
+    echo "WARNING: RAUC's D-Bus service is missing; 'rauc install' will not work" >&2
+fi
+
 systemctl enable ssh systemd-networkd systemd-resolved
 
 useradd -m -s /bin/bash -G sudo "${USERNAME}"
@@ -527,12 +547,25 @@ chmod 0755 "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay" \
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
 sed -i "s/^compatible=.*/compatible=${DISTRO}-ab/" "$MNT/etc/rauc/system.conf"
+# On an encrypted image the partition IS the LUKS container, so leaving RAUC
+# pointed at /dev/disk/by-partlabel/rootfs-* would have it make a filesystem
+# straight over the LUKS header -- destroying the slot rather than updating
+# it. Point it at the unlocked mappings instead; the initramfs opens all of
+# them (every crypttab entry carries the `initramfs` option), so both slots
+# are present at runtime, not just the booted one.
+if [ "$ENCRYPT" = true ]; then
+    sed -i "s|^device=/dev/disk/by-partlabel/rootfs-a|device=/dev/mapper/luks-rootfs-a|; \
+            s|^device=/dev/disk/by-partlabel/rootfs-b|device=/dev/mapper/luks-rootfs-b|" \
+        "$MNT/etc/rauc/system.conf"
+fi
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
          "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
-         "$MNT/usr/local/sbin/ab-overlay-diff.sh"
+         "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
+         "$MNT/usr/local/sbin/ab-update.sh"
 # The others are only ever run by systemd; this one is run by a person, so it
 # gets a name without the extension and a place on the default PATH.
 ln -sf ab-overlay-diff.sh "$MNT/usr/local/sbin/ab-overlay-diff"
+ln -sf ab-update.sh       "$MNT/usr/local/sbin/ab-update"
 
 # Recovery is the thing nobody remembers under pressure, so the machine says it
 # on every login rather than leaving it to documentation on another computer.
@@ -544,6 +577,8 @@ cat > "$MNT/etc/motd" <<'MOTD'
 
     ab-overlay-diff        what this machine changed, and what it hides
     ab-overlay-diff -a     include added and deleted files
+    ab-update              install an update into the other slot
+    ab-update --status     which slot is running, and what is on the other
 
   Recovery is in the GRUB menu at boot (hold Shift / press Esc):
     "Recovery: Slot A|B, reset overlay"   start clean, keep a copy in
@@ -551,9 +586,26 @@ cat > "$MNT/etc/motd" <<'MOTD'
     "Recovery: Slot A|B, no overlay"      boot the image exactly as written
 
 MOTD
-chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service machine-identity.service
+chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service \
+                                machine-identity.service ab-checkin.service
 
-[ -f "$MNT/etc/rauc/keyring.pem" ] || cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null || touch "$MNT/etc/rauc/keyring.pem"
+# RAUC only installs bundles signed by a certificate in this keyring, and the
+# keyring is baked into the image -- so a machine can never be updated by a
+# bundle signed after it was built unless that certificate was already inside.
+# The signing key is generated once by make-bundle.sh and kept; using it here
+# means images and bundles from this repo work together with no extra step.
+# Falling back to the CA bundle keeps unsigned-update-free behaviour for images
+# built before any key existed, rather than failing the build.
+RAUC_CERT="${RAUC_CERT:-/output/rauc-keys/cert.pem}"
+if [ -f "$RAUC_CERT" ]; then
+    log "Trusting the update signing certificate ($RAUC_CERT)"
+    cp "$RAUC_CERT" "$MNT/etc/rauc/keyring.pem"
+elif [ ! -f "$MNT/etc/rauc/keyring.pem" ]; then
+    log "WARNING: no signing certificate at $RAUC_CERT — this image will not accept"
+    log "         update bundles. Build a bundle once to generate the key, then rebuild."
+    cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null \
+        || touch "$MNT/etc/rauc/keyring.pem"
+fi
 
 # Configure first-boot TPM/Tang enrollment.
 if [ "$ENCRYPT" = true ] && { [ "$UNLOCK" = tpm2 ] || [ "$UNLOCK" = tang ]; }; then
@@ -606,7 +658,13 @@ log "Kernel version: $KVER"
 sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" \
     "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
 chroot "$MNT" grub-editenv /boot/grub/grubenv create
-chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" A_TRY=0 B_TRY=0
+# A_OK/B_OK alongside the try counters: RAUC's grub backend reads ORDER,
+# <slot>_TRY and <slot>_OK, and without the _OK variables it reports every
+# slot as "boot status: bad" and refuses to mark one primary -- so an update
+# installs and then cannot be activated. grub.cfg honours them too, so a slot
+# explicitly marked bad is skipped rather than booted into a known failure.
+chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" \
+    A_TRY=0 B_TRY=0 A_OK=1 B_OK=1
 
 step "Syncing root slot A -> slot B"
 umount "$MNT/dev/pts" "$MNT/dev" "$MNT/proc" "$MNT/sys"

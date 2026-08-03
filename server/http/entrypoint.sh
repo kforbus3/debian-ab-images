@@ -2,7 +2,7 @@
 # Render boot.ipxe from environment and expose the imager + images over HTTP.
 set -eu
 
-: "${SERVER_IP:?Set SERVER_IP to the provisioning server's IP address}"
+: "${SERVER_IP:?Set SERVER_IP to the IP address of the provisioning server}"
 : "${IMAGE_FILE:?Set IMAGE_FILE to the image filename in ./output (e.g. debian-trixie-ab.img.zst)}"
 ACTION="${ACTION:-reboot}"
 
@@ -13,6 +13,10 @@ ln -sfn /data/imager /srv/http/imager
 # Per-machine boot scripts written by the web UI. Created above if absent so a
 # missing directory 404s per request rather than breaking nginx at startup.
 ln -sfn /data/hosts  /srv/http/hosts
+# RAUC update bundles, so a machine can be updated in place instead of
+# re-imaged: rauc install http://<server>/bundles/<name>.raucb
+mkdir -p /data/bundles 2>/dev/null || true
+ln -sfn /data/bundles /srv/http/bundles
 
 # UNASSIGNED decides what a machine with no per-machine assignment gets:
 #   image (default) — the default image, i.e. plug in a switch and image it all

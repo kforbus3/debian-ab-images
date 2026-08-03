@@ -13,7 +13,9 @@ through the Docker socket.
   named phases reported by the builder, so a long step like debootstrap or
   compression is identifiable rather than just slow. Navigating away and back
   reattaches to the running build.
-- **One-click imager build.**
+- **One-click imager build**, for the architecture selected in the build form.
+  The imager is a kernel the target machine executes, so an amd64 imager cannot
+  netboot an arm64 machine; the page says so when the one you need is missing.
 - **Image library** — list, download, and delete built images, with distro/
   release/encryption metadata and SHA256 for each, and a **Deploy** button that
   points the provisioning server at an image.
@@ -29,9 +31,19 @@ through the Docker socket.
   switch gets the default image. Machines already seen by the monitor have an
   *assign image…* link, so you can plug in a fleet and target from what shows up
   rather than collecting MAC addresses first.
-- **Live imaging monitor** — machines that are PXE-booting / being imaged,
-  merged from the dnsmasq **and** nginx logs, so a machine shows **imaged** once
-  it has fully downloaded the image. Many machines image concurrently.
+- **Imaging** — a live view of machines writing an image right now, with per-machine
+  progress reported by the imager itself. A machine that finishes drops off shortly
+  after; one that stops reporting is marked stalled and then removed, so the page
+  only ever shows current work. The Provisioning page's list is the narrower
+  question of who is on the network and still needs an image.
+- **Fleet** — every machine this server has imaged, kept on disk and never expired.
+  Machines report once when imaging finishes and again when they boot the image, so
+  a machine that imaged and then failed to boot shows as **never-booted** rather
+  than being indistinguishable from a success.
+- **Updates** — build a signed RAUC bundle from an image you have already built,
+  and see which versions the fleet is running. Installing a bundle writes the slot
+  a machine is not running on and reboots into it, with automatic rollback if that
+  slot fails to come up. See [UPDATES.md](UPDATES.md).
 - **Disk usage** at a glance on the dashboard.
 
 ## Running it

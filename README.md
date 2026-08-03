@@ -15,9 +15,9 @@ and reliably.
 | Component | What it does |
 |-----------|--------------|
 | **builder/** | Produces a bootable Debian **or Ubuntu** A/B disk image (`.img`) — two root slots, shared `/boot`, persistent overlay, GRUB+RAUC for atomic updates, first-boot auto-expand. Runs in Docker. |
-| **imager/** | Builds a tiny netboot environment (kernel + initramfs) that auto-detects a machine's disk, streams the image over HTTP, writes it, and reboots. |
+| **imager/** | Builds a tiny netboot environment (kernel + initramfs) that auto-detects a machine's disk, streams the image over HTTP, writes it, and reboots. Built per architecture — an amd64 imager cannot boot an arm64 machine. |
 | **server/** | A Dockerized provisioning server: dnsmasq (proxyDHCP/DHCP + TFTP + iPXE) and nginx (serves the image). Plug machines into the switch, power on, walk away. |
-| **webui/** | An optional browser UI to manage everything — build images with a **live log**, manage the image library, configure/run the provisioning server, and **watch machines being imaged in real time**. |
+| **webui/** | An optional browser UI to manage everything — build images with a **live log**, manage the image library, configure/run the provisioning server, **watch machines being imaged in real time**, track the **fleet** it has deployed, and build signed **update bundles**. |
 
 ```
                               ┌─────────── provisioning server (Docker) ───────────┐
@@ -92,9 +92,14 @@ Supported releases: Debian `trixie` (13) and `bookworm` (12); Ubuntu `resolute`
 ### 2. Build the netboot imager
 
 ```bash
-make imager
-# → output/imager/{vmlinuz,initramfs.img}
+make imager                       # amd64 → output/imager/
+./imager/run.sh --arch arm64      # arm64 → output/imager/arm64/
 ```
+
+The imager is a kernel the target machine executes, so it has to match that
+machine: an amd64 imager cannot netboot an arm64 box. Build one per architecture
+you deploy. Each machine picks the right one at boot from iPXE's `${buildarch}`,
+so both can be present at once.
 
 ### 3. Start the provisioning server
 
@@ -160,7 +165,7 @@ network where you intend every PXE-booting machine to be re-imaged.
 - [docs/WEBUI.md](docs/WEBUI.md) — the browser-based management console
 - [docs/BUILDER.md](docs/BUILDER.md) — image build options and customization
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — provisioning server, DHCP modes, real-hardware + QEMU testing
-- [docs/UPDATES.md](docs/UPDATES.md) — RAUC atomic updates and A/B slot switching
+- [docs/UPDATES.md](docs/UPDATES.md) — building signed update bundles, installing them, and watching a rollout
 - **[docs/RECOVERY.md](docs/RECOVERY.md) — the overlay root, and the GRUB recovery entries when a change breaks a machine**
 - [docs/SECURITY.md](docs/SECURITY.md) — secrets, signing, network exposure
 - [CONTRIBUTING.md](CONTRIBUTING.md)

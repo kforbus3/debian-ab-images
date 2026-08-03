@@ -56,10 +56,15 @@ fi
     echo "no-resolv"
     echo "dhcp-no-override"
 
-    # Tag iPXE clients (they send DHCP option 175) and UEFI x86-64 clients.
+    # Tag iPXE clients (they send DHCP option 175) and UEFI clients by
+    # architecture. The client tells us what it is in DHCP option 93:
+    #   0  = x86 BIOS        7, 9 = x86-64 UEFI        11 = arm64 UEFI
+    # Without the arm64 tag an aarch64 machine is handed undionly.kpxe, an x86
+    # BIOS binary, and dies at the firmware with nothing useful on screen.
     echo "dhcp-match=set:ipxe,175"
     echo "dhcp-match=set:efi64,option:client-arch,7"
     echo "dhcp-match=set:efi64,option:client-arch,9"
+    echo "dhcp-match=set:efiarm64,option:client-arch,11"
 
     if [ "$MODE" = "dhcp" ]; then
         : "${DHCP_RANGE_START:?Set DHCP_RANGE_START for MODE=dhcp}"
@@ -68,10 +73,13 @@ fi
         echo "dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${DHCP_NETMASK:-255.255.255.0},${LEASE_TIME:-1h}"
         [ -n "${DHCP_ROUTER:-}" ] && echo "dhcp-option=3,${DHCP_ROUTER}"
         [ -n "${DHCP_DNS:-}" ] && echo "dhcp-option=6,${DHCP_DNS}"
-        # Boot files by client type.
+        # Boot files by client type. Most specific first: dnsmasq takes the
+        # first dhcp-boot whose tags all match, so the arm64 line has to come
+        # before the untagged x86 fallback or arm64 machines never reach it.
         echo "dhcp-boot=tag:ipxe,http://${SERVER_IP}/boot.ipxe"
+        echo "dhcp-boot=tag:!ipxe,tag:efiarm64,ipxe-arm64.efi"
         echo "dhcp-boot=tag:!ipxe,tag:efi64,ipxe.efi"
-        echo "dhcp-boot=tag:!ipxe,tag:!efi64,undionly.kpxe"
+        echo "dhcp-boot=tag:!ipxe,tag:!efi64,tag:!efiarm64,undionly.kpxe"
     else
         : "${PROXY_SUBNET:?Set PROXY_SUBNET (e.g. 192.168.1.0) for MODE=proxy}"
         echo "dhcp-range=${PROXY_SUBNET},proxy"
@@ -79,6 +87,7 @@ fi
         echo "pxe-service=tag:!ipxe,x86PC,\"Network boot (BIOS)\",undionly.kpxe"
         echo "pxe-service=tag:!ipxe,BC_EFI,\"Network boot (UEFI)\",ipxe.efi"
         echo "pxe-service=tag:!ipxe,X86-64_EFI,\"Network boot (UEFI)\",ipxe.efi"
+        echo "pxe-service=tag:!ipxe,ARM64_EFI,\"Network boot (arm64 UEFI)\",ipxe-arm64.efi"
         echo "dhcp-boot=tag:ipxe,http://${SERVER_IP}/boot.ipxe"
     fi
 } > "$CONF"
