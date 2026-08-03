@@ -24,6 +24,16 @@ case "$ARCH" in
 esac
 PLATFORM="linux/${ARCH}"
 
+# Cross-architecture builds run the target's binaries under qemu, which needs an
+# interpreter registered with binfmt_misc. Docker does not do it, and without it
+# the build fails deep inside with "Exec format error" rather than saying why.
+want=x86_64; [ "$ARCH" = arm64 ] && want=aarch64
+if [ "$(uname -m)" != "$want" ]; then
+    echo "[run] registering qemu-$want so $ARCH can be built on this host"
+    docker run --privileged --rm tonistiigi/binfmt --install "$ARCH" >/dev/null \
+        || echo "[run] WARNING: could not register binfmt; this build will likely fail"
+fi
+
 echo "[run] building the $ARCH imager (platform $PLATFORM)"
 docker build --platform="$PLATFORM" --build-arg "KERNEL_PKG=$KERNEL_PKG" \
     -t "debian-ab-imager:${ARCH}" "$HERE"

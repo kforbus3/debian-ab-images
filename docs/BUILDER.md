@@ -153,6 +153,27 @@ It runs as root with the image as `/`, but on the builder's kernel — so
 running init. A non-zero exit fails the build rather than shipping a
 half-customized image.
 
+## Building for another architecture
+
+Cross-architecture builds run the target's binaries under qemu, which the kernel
+only does once an interpreter is registered with `binfmt_misc`. Docker does not
+do that on its own, so building an arm64 image or imager on an amd64 host (or
+the reverse) needs it registered first.
+
+Both `run.sh` scripts and the web UI now do it automatically before a cross
+build:
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+```
+
+It is idempotent and lasts until reboot. The first run on a fresh host pulls
+that image, so it needs network; if registration fails the build says so rather
+than dying later with `Exec format error`.
+
+Remember that an arm64 **image** needs an arm64 **imager** to be deployed over
+the network — the imager is a kernel the target machine executes. Build both.
+
 ## How it runs
 
 `builder/run.sh` builds `builder/Dockerfile` and runs it `--privileged` (needed for

@@ -29,9 +29,11 @@ export default function Updates() {
     } catch (e) { toast.error(apiError(e)); }
     try {
       const { data } = await api.get("/images");
-      // Bundles are built from an uncompressed image: the builder has to mount
-      // the root slot out of it, which it cannot do through zstd or gzip.
-      const imgs = data.images.filter((i: any) => i.name.endsWith(".img"));
+      // Compressed images are fine: the builder decompresses first, because it
+      // has to mount the root slot out of the image and cannot do that through
+      // zstd or gzip. Most images this app produces are compressed, so
+      // excluding them here made the update path unreachable for the usual case.
+      const imgs = data.images.filter((i: any) => /\.img(\.zst|\.gz)?$/.test(i.name));
       setImages(imgs.map((i: any) => i.name));
       // Encrypted images need their passphrase to be read; the field only
       // appears when the selected image actually requires it.
@@ -90,7 +92,7 @@ export default function Updates() {
             <div className="col-span-2">
               <Label>Source image</Label>
               <Select value={image} onChange={(e) => setImage(e.target.value)}>
-                {images.length === 0 && <option value="">No uncompressed images available</option>}
+                {images.length === 0 && <option value="">No images available</option>}
                 {images.map((n) => <option key={n} value={n}>{n}</option>)}
               </Select>
             </div>
@@ -117,10 +119,10 @@ export default function Updates() {
             <Package size={14} /> Build bundle
           </Button>
 
-          {images.length === 0 && (
-            <p className="mt-3 text-xs text-amber-400">
-              Bundles are built from an uncompressed <code>.img</code>. Rebuild an image with
-              Compression set to <strong>none</strong> to make one available here.
+          {image && /\.(zst|gz)$/.test(image) && (
+            <p className="mt-3 text-xs text-zinc-500">
+              This image is compressed; the builder decompresses it first, which adds a
+              few minutes and needs room for the expanded image.
             </p>
           )}
 

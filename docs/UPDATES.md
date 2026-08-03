@@ -54,10 +54,13 @@ Keep `output/rauc-keys/` and keep it private. Losing `key.pem` means no further
 updates for machines already deployed; leaking it means someone else can sign an
 update your fleet will install.
 
-### One constraint on the source image
+### Source images
 
 - **Uncompressed** (`.img`, not `.img.zst`) — the builder mounts the root slot
   out of it.
+- **Compressed images are fine.** The builder decompresses first, because the
+  root slot has to be mounted out of the image and that cannot be done through
+  zstd or gzip. It costs a few minutes and room for the expanded image.
 - **Encrypted images are fine**, but the builder needs the passphrase to read
   the root slot: `--luks-passphrase` on the command line, or the field that
   appears on the Updates page when you pick an encrypted image. It is used only
@@ -144,7 +147,16 @@ old release shadowing the new one is how an update silently half-applies.
 So apt is fine for looking around, debugging, or something temporary. For
 software that should persist, put it in the image: `--packages` at build time,
 or `overlay.d/` and `--run-script` (see [BUILDER.md](BUILDER.md)). Machine state
-outside those paths — `/home`, `/etc`, `/srv`, `/opt`, logs — is kept.
+outside those paths — `/home`, `/etc`, `/srv`, `/opt`, `/usr/local`, logs — is
+kept.
+
+`/usr/local` is deliberately excluded from the clear even though `/usr` is not.
+The FHS reserves it for locally installed software precisely because packages
+never touch it, and it is where a person puts a script expecting it to stay.
+
+**In practice this means your patch cadence is your image-rebuild cadence.** The
+`apt-get upgrade` happens inside the build, so rebuilding picks up whatever is
+current in the archive, and the bundle ships it to the fleet.
 
 ## Watching a rollout
 

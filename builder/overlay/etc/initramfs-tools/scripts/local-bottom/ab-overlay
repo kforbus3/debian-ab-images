@@ -127,10 +127,34 @@ LAST=""
 
 if [ -n "$SLOT" ] && [ -n "$LAST" ] && [ "$SLOT" != "$LAST" ]; then
     msg "slot changed ${LAST} -> ${SLOT}; clearing OS paths from the upper layer"
+
+    # /usr is the distribution's, and an old release's copy shadowing the new
+    # one is the whole reason this runs -- but /usr/local is not the
+    # distribution's. The FHS reserves it for locally installed software
+    # precisely because packages never touch it, and it is where a person puts
+    # a script expecting it to stay put. Clearing /usr wholesale took it too,
+    # so a script in /usr/local/bin vanished on the first update with nothing
+    # said. It is moved aside and put back rather than skipped, because the
+    # upper layer has no way to delete part of a directory and keep the rest.
+    KEEP=/ab-rw/.keep-usr-local
+    remove_path "$KEEP" || true
+    if [ -e /ab-rw/upper/usr/local ]; then
+        mv /ab-rw/upper/usr/local "$KEEP" 2>/dev/null || true
+    fi
+
     for d in usr bin sbin lib lib32 lib64 libx32 boot \
              var/lib/dpkg var/lib/apt var/cache/apt; do
         remove_path "/ab-rw/upper/$d" || true
     done
+
+    if [ -e "$KEEP" ]; then
+        mkdir -p /ab-rw/upper/usr 2>/dev/null || true
+        if mv "$KEEP" /ab-rw/upper/usr/local 2>/dev/null; then
+            msg "  kept /usr/local (locally installed software is yours, not the image's)"
+        else
+            msg "  WARNING: could not restore /usr/local; it is at ${KEEP}"
+        fi
+    fi
 
     # Files the image declares it owns -- shipped in the build's overlay, or
     # named with --own-path. Whatever the machine has written at those exact

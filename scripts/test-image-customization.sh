@@ -69,6 +69,8 @@ echo "hosts-scribble:  $(grep -c SCRIBBLE /etc/hosts 2>/dev/null)"
 echo "netplan:         $(cat /etc/netplan/10-corp.yaml 2>/dev/null | grep -c 'version: 2')"
 echo "netplan-scribble:$(grep -c SCRIBBLE /etc/netplan/10-corp.yaml 2>/dev/null)"
 echo "machine-own:     $([ -f /etc/netplan/99-machine.yaml ] && echo present || echo absent)"
+echo "usr-local-mine:  $([ -f /usr/local/bin/site-script ] && echo present || echo absent)"
+echo "usr-local-image: $([ -x /usr/local/sbin/ab-update ] && echo present || echo absent)"
 echo "custom-marker:   $([ -f /etc/ab-custom-marker ] && echo present || echo absent)"
 echo "owned-list:      $(wc -l < /usr/lib/ab/image-owned.list 2>/dev/null || echo missing)"
 if [ ! -f /var/lib/ab-custom-scribbled ]; then
@@ -78,6 +80,12 @@ if [ ! -f /var/lib/ab-custom-scribbled ]; then
     echo "# SCRIBBLE" >> /etc/netplan/10-corp.yaml
     # A machine-local file the image does NOT own: it must survive the update.
     echo "network: {version: 2}" > /etc/netplan/99-machine.yaml
+    # /usr/local is reserved for locally installed software: clearing /usr on a
+    # slot change must not take it. The image's own scripts live in
+    # /usr/local/sbin, so both have to still be there afterwards.
+    mkdir -p /usr/local/bin
+    echo "#!/bin/sh" > /usr/local/bin/site-script
+    chmod +x /usr/local/bin/site-script
 fi
 echo "AB-CUSTOM-PROBE-END"
 systemctl poweroff --no-block
@@ -150,4 +158,6 @@ grep -qa "hosts-scribble:  1" /output/custom-same-slot.log || { echo "  FAIL: th
 grep -qa "hosts-scribble:  0" /output/custom-other-slot.log || { echo "  FAIL: the image did not win after the slot change"; ok=0; }
 grep -qa "netplan-scribble:0" /output/custom-other-slot.log || { echo "  FAIL: the netplan the image owns was not restored"; ok=0; }
 grep -qa "machine-own:     present" /output/custom-other-slot.log || { echo "  FAIL: a machine-local file was destroyed; only owned paths may be dropped"; ok=0; }
+grep -qa "usr-local-mine:  present" /output/custom-other-slot.log || { echo "  FAIL: /usr/local was cleared with /usr; locally installed software must survive"; ok=0; }
+grep -qa "usr-local-image: present" /output/custom-other-slot.log || { echo "  FAIL: the image's own /usr/local/sbin tools went missing after the slot change"; ok=0; }
 [ "$ok" = 1 ] && echo "  PASS: image-owned files override the machine, machine-local files survive" || exit 1

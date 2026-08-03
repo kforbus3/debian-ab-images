@@ -45,6 +45,27 @@ done
 
 [ -n "$IMAGE" ] || die "--image is required"
 [ -f "$IMAGE" ] || die "no such image: $IMAGE"
+
+WORK="$(mktemp -d)"
+
+# A compressed image is decompressed first rather than refused. The root slot
+# has to be mounted out of the image, which cannot be done through zstd or gzip
+# -- but that is a reason to decompress, not a reason to make people rebuild an
+# image they already have. Most images this project produces are compressed,
+# so refusing them made the update path unreachable for the common case.
+case "$IMAGE" in
+    *.img.zst|*.zst)
+        log "Decompressing $(basename "$IMAGE") (compressed images cannot be mounted directly)"
+        command -v zstd >/dev/null || die "zstd is not available to decompress $IMAGE"
+        zstd -d -q -o "$WORK/source.img" "$IMAGE" || die "could not decompress $IMAGE"
+        IMAGE="$WORK/source.img"
+        ;;
+    *.img.gz|*.gz)
+        log "Decompressing $(basename "$IMAGE")"
+        gzip -dc "$IMAGE" > "$WORK/source.img" || die "could not decompress $IMAGE"
+        IMAGE="$WORK/source.img"
+        ;;
+esac
 VERSION="${VERSION:-$(date -u +%Y.%m.%d-%H%M)}"
 
 # --- signing key -------------------------------------------------------------
@@ -62,7 +83,6 @@ if [ ! -f "$KEYDIR/key.pem" ] || [ ! -f "$KEYDIR/cert.pem" ]; then
     chmod 600 "$KEYDIR/key.pem"
 fi
 
-WORK="$(mktemp -d)"
 cleanup() {
     mountpoint -q "$WORK/slot" 2>/dev/null && umount "$WORK/slot" || true
     cryptsetup close "$MAPNAME" 2>/dev/null || true

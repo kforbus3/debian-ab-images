@@ -43,12 +43,6 @@ async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
     known = {i["name"] for i in orch.list_images()[0]}
     if image not in known:
         raise HTTPException(404, f"no such image: {image}")
-    if image.endswith((".zst", ".gz")):
-        raise HTTPException(
-            400,
-            "Bundles are built from an uncompressed .img. Rebuild that image with "
-            "compression set to none, or decompress it first.",
-        )
     # An encrypted image keeps its root slot inside a LUKS container, so the
     # builder needs the passphrase to read it. Only the builder does: the bundle
     # itself carries a plain filesystem and installs on any machine.

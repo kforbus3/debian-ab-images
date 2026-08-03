@@ -357,7 +357,8 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     out_name = f"{distro}-{suite}-{arch}-ab.img"
     # `-e VAR` (no value) makes the docker CLI forward VAR from its own env.
     script = (
-        _docker_build("builder", f"debian-ab-builder:{arch}", platform)
+        _binfmt_prelude(arch)
+        + _docker_build("builder", f"debian-ab-builder:{arch}", platform)
         + "echo '--- starting image build ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + f"--privileged --platform={platform} -v {_q(host_output_dir())}:/output "
@@ -383,14 +384,41 @@ def build_imager_cmd(arch: str = "amd64") -> tuple[list[str], str]:
     platform = f"linux/{arch}"
     kernel_pkg = f"linux-image-{arch}"
     script = (
-        _docker_build("imager", f"debian-ab-imager:{arch}", platform,
-                      build_args=f"--build-arg KERNEL_PKG={kernel_pkg}")
+        _binfmt_prelude(arch)
+        + _docker_build("imager", f"debian-ab-imager:{arch}", platform,
+                        build_args=f"--build-arg KERNEL_PKG={kernel_pkg}")
         + f"echo '--- building {arch} imager ---'\n"
         + f"docker run --rm --name {container_name(JOB_TOKEN)} "
         + f"--platform={platform} -e ARCH={arch} "
         + f"-v {_q(host_output_dir())}:/output debian-ab-imager:{arch}\n"
     )
     return ["bash", "-c", script], f"Build netboot imager ({arch})"
+
+
+def _binfmt_prelude(arch: str) -> str:
+    """Shell that makes cross-architecture builds possible on this host.
+
+    Building an arm64 image or imager on an amd64 host runs arm64 binaries under
+    qemu, which the kernel only does once binfmt_misc has an interpreter
+    registered. Docker does not do that on its own, so without this the build
+    dies deep inside debootstrap with "Exec format error" -- or, for the imager,
+    at the first RUN in its Dockerfile.
+
+    The registration is global, idempotent, and survives until reboot, so doing
+    it before every cross build costs a few seconds and removes a manual step
+    the UI would otherwise have to explain. `uname -m` is the host kernel's,
+    even from inside this container, so it is a sound comparison.
+    """
+    want = {"amd64": "x86_64", "arm64": "aarch64"}.get(arch, "")
+    if not want:
+        return ""
+    return (
+        f'if [ "$(uname -m)" != "{want}" ]; then\n'
+        f"  echo '--- registering qemu-{want} so {arch} can be built on this host ---'\n"
+        f"  docker run --privileged --rm tonistiigi/binfmt --install {arch} \\\n"
+        f"    || echo 'WARNING: could not register binfmt; an {arch} build will fail here.'\n"
+        "fi\n"
+    )
 
 
 def _docker_build(subdir: str, tag: str, platform: str = "linux/amd64",
