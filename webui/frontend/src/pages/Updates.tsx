@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api, apiError, fmtBytes } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Spinner, LogView } from "../components/ui";
-import { Package, Copy, RefreshCw } from "lucide-react";
+import { Package, Copy, RefreshCw, KeyRound } from "lucide-react";
+import { secretName } from "./Secrets";
 
 type Bundle = {
   name: string; size: number; created: string;
@@ -18,6 +19,7 @@ export default function Updates() {
   const [version, setVersion] = useState("");
   const [luks, setLuks] = useState("");
   const [encrypted, setEncrypted] = useState<Record<string, boolean>>({});
+  const [inStore, setInStore] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
 
@@ -39,6 +41,13 @@ export default function Updates() {
       // appears when the selected image actually requires it.
       setEncrypted(Object.fromEntries(imgs.map((i: any) => [i.name, !!i.meta?.encrypted])));
     } catch { /* the selector simply stays empty */ }
+    try {
+      // An image built with a generated passphrase already has it filed here,
+      // so the prompt below is not just inconvenient -- it asks for something
+      // the operator was deliberately never given.
+      const { data } = await api.get("/secrets/entries");
+      setInStore(new Set<string>(data.entries || []));
+    } catch { /* no store configured; the prompt stays */ }
   }
 
   useEffect(() => { load(); }, []);
@@ -64,6 +73,8 @@ export default function Updates() {
       es.onerror = () => { es.close(); setBusy(false); load(); };
     } catch (e) { toast.error(apiError(e)); setBusy(false); }
   }
+
+  const stored = !!image && inStore.has(secretName(image));
 
   const copy = (t: string) => {
     navigator.clipboard?.writeText(t);
@@ -102,7 +113,17 @@ export default function Updates() {
             </div>
           </div>
 
-          {encrypted[image] && (
+          {encrypted[image] && stored && (
+            <p className="mt-3 flex items-start gap-1.5 text-xs text-emerald-400">
+              <KeyRound size={13} className="mt-0.5 shrink-0" />
+              <span>
+                The secrets manager holds this image's passphrase — it is read from there
+                to open the root slot, and never appears in the bundle.
+              </span>
+            </p>
+          )}
+
+          {encrypted[image] && !stored && (
             <div className="mt-3">
               <Label>LUKS passphrase for {image}</Label>
               <Input type="password" value={luks} onChange={(e) => setLuks(e.target.value)}
@@ -115,7 +136,7 @@ export default function Updates() {
           )}
 
           <Button className="mt-4" loading={busy}
-                  disabled={!image || (encrypted[image] && !luks)} onClick={build}>
+                  disabled={!image || (encrypted[image] && !stored && !luks)} onClick={build}>
             <Package size={14} /> Build bundle
           </Button>
 

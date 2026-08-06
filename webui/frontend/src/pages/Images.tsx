@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { HardDrive, Download, Trash2, RefreshCw, Rocket, Lock } from "lucide-react";
+import { HardDrive, Download, Trash2, RefreshCw, Rocket, Lock, KeyRound } from "lucide-react";
 import { api, apiError, fmtBytes } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, PageHeader, Spinner, Badge } from "../components/ui";
+import { secretName } from "./Secrets";
 
 interface Meta { distro?: string; suite?: string; encrypted?: boolean; unlock?: string; created?: string; }
 interface Img { name: string; size: number; created: string; sha256?: string; meta?: Meta; }
@@ -13,6 +14,8 @@ export default function Images() {
   const [imagerReady, setImagerReady] = useState(false);
   const [deployed, setDeployed] = useState("");
   const [loading, setLoading] = useState(true);
+  const [inStore, setInStore] = useState<Set<string>>(new Set());
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
 
   async function load() {
     setLoading(true);
@@ -20,6 +23,10 @@ export default function Images() {
       const [{ data }, cfg] = await Promise.all([api.get("/images"), api.get("/server/config")]);
       setImages(data.images); setImagerReady(data.imager_ready); setDeployed(cfg.data.IMAGE_FILE || "");
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
+    try {
+      const { data } = await api.get("/secrets/entries");
+      setInStore(new Set<string>(data.entries || []));
+    } catch { /* no store configured — encrypted images just show the lock */ }
   }
   useEffect(() => { load(); }, []);
 
@@ -33,6 +40,15 @@ export default function Images() {
       const res = await api.get(`/images/${encodeURIComponent(name)}/download`, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a"); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+    } catch (e) { toast.error(apiError(e)); }
+  }
+  // Shown here as well as on the Secrets page because this is the list an
+  // operator is looking at when a machine built from one of these rows will not
+  // unlock, and the recovery key should be one click from the image it opens.
+  async function reveal(name: string) {
+    try {
+      const { data } = await api.get(`/secrets/passphrase/${encodeURIComponent(name)}`);
+      setRevealed((r) => ({ ...r, [name]: data.passphrase }));
     } catch (e) { toast.error(apiError(e)); }
   }
   async function deploy(name: string) {
@@ -70,8 +86,20 @@ export default function Images() {
                   <td className="px-4 py-3 font-medium text-zinc-200">
                     <div className="flex items-center gap-2">{m.name}
                       {m.meta?.encrypted && <span title={`LUKS2, unlock: ${m.meta.unlock}`}><Lock size={13} className="text-amber-400" /></span>}
+                      {m.meta?.encrypted && inStore.has(secretName(m.name)) && (
+                        <button type="button" onClick={() => reveal(m.name)}
+                                title="Recovery passphrase is in the secrets manager — click to reveal"
+                                className="text-emerald-400 hover:text-emerald-300">
+                          <KeyRound size={13} />
+                        </button>
+                      )}
                       {m.name === deployed && <Badge color="green">deploying</Badge>}
                     </div>
+                    {revealed[m.name] && (
+                      <code className="mt-1 block break-all font-mono text-xs font-normal text-amber-300">
+                        {revealed[m.name]}
+                      </code>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-zinc-400">{m.meta ? `${m.meta.distro} ${m.meta.suite}` : "—"}</td>
                   <td className="px-4 py-3 text-zinc-400">{fmtBytes(m.size)}</td>

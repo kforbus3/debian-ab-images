@@ -3,8 +3,10 @@ import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app import orchestrator as orch
+from app import secretstore
 from app.jobs import _ProgressEvent as ProgressEvent, jobs
 from app.security import create_stream_token, require_auth, verify_stream_token
 
@@ -55,8 +57,14 @@ def _validate_build(opts: dict) -> None:
             f"need at least {need} MiB (≈{-(-need // 1024)} GiB)",
         )
     if opts.get("encrypt"):
-        if not opts.get("luks_passphrase"):
+        # store_passphrase means "generate one and file it in the secrets
+        # manager", which is the other way of satisfying this requirement.
+        if not opts.get("luks_passphrase") and not opts.get("store_passphrase"):
             raise HTTPException(400, "encrypt requires a LUKS passphrase")
+        if opts.get("store_passphrase") and not secretstore.is_configured():
+            raise HTTPException(
+                400, "no secrets manager is configured — set one up under Secrets "
+                     "Manager, or enter a LUKS passphrase for this build")
         if opts.get("unlock") == "tang" and not opts.get("tang_url"):
             raise HTTPException(400, "unlock=tang requires a Tang URL")
 
@@ -106,9 +114,44 @@ async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
             os.remove(script_path)
     except OSError as exc:
         raise HTTPException(500, f"could not stage the customization script: {exc}")
+    stored_at = await _store_generated_passphrase(opts)
     cmd, label, env = orch.build_image_cmd(opts)
     job = await jobs.start(type="image", label=label, cmd=cmd, now=orch.now(), env=env)
-    return job.public()
+    return {**job.public(), "passphrase_stored_at": stored_at}
+
+
+async def _store_generated_passphrase(opts: dict) -> str:
+    """Generate this build's LUKS passphrase and file it, before anything runs.
+
+    Order is the whole point. Storing after a successful build would mean a
+    write that fails -- an expired token, a sealed store, a network blip -- has
+    already produced an encrypted image nobody holds the recovery key for.
+    Storing first can only leave an unused secret behind if the build then
+    fails, which costs nothing and is visible in the store's own listing.
+
+    The passphrase is put back into `opts` and travels to the builder in
+    LUKS_PASS like any other, so the builder needs no store access of its own.
+    """
+    if not (opts.get("encrypt") and opts.get("store_passphrase")):
+        return ""
+    image = orch.image_output_name(opts)
+    passphrase = secretstore.generate_passphrase()
+    meta = {
+        "distro": opts.get("distro", "debian"),
+        "suite": opts.get("suite", "trixie"),
+        "arch": opts.get("arch", "amd64"),
+        "hostname": opts.get("hostname", ""),
+        "unlock": opts.get("unlock", "keyfile"),
+    }
+    try:
+        path = await run_in_threadpool(secretstore.store_passphrase, image, passphrase, meta)
+    except secretstore.SecretStoreError as exc:
+        raise HTTPException(
+            502, f"the build was not started: its LUKS passphrase could not be stored "
+                 f"in the secrets manager ({exc}). Nothing is built until the recovery "
+                 f"key has somewhere to live.")
+    opts["luks_passphrase"] = passphrase
+    return path
 
 
 @router.post("/imager/build")

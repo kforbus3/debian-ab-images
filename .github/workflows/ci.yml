@@ -126,6 +126,15 @@ jobs:
           print(f"OK: {len(paths)} API routes, all routers mounted")
           PY
 
+      - name: Secrets-manager integration
+        working-directory: webui/backend
+        run: |
+          # Runs against a fake KV v2 server in-process. The assertion that
+          # matters is ordering: an encrypted build must file its passphrase
+          # before it starts, and must not start at all if the store refuses it.
+          # Nothing about that is visible until someone needs the recovery key.
+          python tests/test_secretstore.py
+
       - name: Provisioning config renders for every architecture
         run: |
           # dnsmasq must hand an arm64 machine an arm64 bootloader; getting this

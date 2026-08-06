@@ -64,6 +64,49 @@ first-boot service enrolls the TPM/Tang and **destroys the keyfile**, leaving no
 key on disk. The `--luks-passphrase` you supply is always kept as a recovery key —
 store it safely. See [BUILDER.md](BUILDER.md#disk-encryption-luks2).
 
+### Where the recovery passphrase lives
+
+"Store it safely" is the part that fails in practice. For every unlock method
+except `passphrase`, the passphrase is never typed again during normal
+operation — machines unlock from the TPM, from Tang, or from a keyfile — so
+nothing exercises it until the day a TPM is cleared by a firmware update and a
+machine stops at the initramfs prompt.
+
+The web UI can therefore generate it and put it in a secrets manager instead
+(OpenBao or HashiCorp Vault, KV v2). Configure a store under **Secrets Manager**,
+then tick *Generate a random passphrase and store it* on an encrypted build:
+
+- The passphrase is 256 bits of randomness, generated in the backend — never
+  typed, never displayed during the build, never on a command line.
+- It is written to the store **before the build starts**. If the store will not
+  take it, no image is built. The reverse order can produce an encrypted image
+  whose recovery key was never persisted, which is not recoverable; a leftover
+  secret from a failed build is merely untidy.
+- It is filed under the image's name (`<mount>/<prefix>/<image>.img`), with the
+  distro, suite, arch and unlock method alongside it.
+- The **builder container never talks to the store.** It receives the passphrase
+  in `LUKS_PASS` exactly as it does when one is typed, so nothing privileged
+  gains network access or a store credential.
+- Packaging an update bundle from an encrypted image reads the passphrase back
+  automatically rather than prompting for it.
+
+Two things to be deliberate about:
+
+- **The store credential needs write access**, not just read. A read-only policy
+  passes the connection test and fails the first build.
+- **Rebuilding the same image name files a new passphrase.** KV v2 keeps the
+  previous version, and machines already imaged still need it — so keep version
+  history on that mount (a KV v1 mount is rejected for this reason).
+
+Revealing a stored passphrase from the UI is deliberately one click: the moment
+you need it is a machine stopped at an initramfs prompt. It is no wider than the
+session already is — this UI drives the Docker socket, which is root on the host.
+
+On the command line, `scripts/luks-secret.sh` does the same job against the
+`bao`/`vault` CLI and writes the same payload, so an image built either way is
+recoverable from the other. See
+[BUILDER.md](BUILDER.md#storing-the-passphrase-in-a-secrets-manager).
+
 ## Reporting a vulnerability
 
 Report security issues privately to the maintainer with reproduction steps and the

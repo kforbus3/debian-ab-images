@@ -306,6 +306,17 @@ LOW_DISK_GB = 12.0
 
 
 # --------------------------- builds ---------------------------
+def image_output_name(opts: dict) -> str:
+    """The image file a build with these options will produce, before compression.
+
+    Shared with the caller because a passphrase has to be filed under this name
+    in the secrets manager *before* the build that produces it starts, and the
+    two must not be able to disagree about what it is.
+    """
+    return (f"{opts.get('distro', 'debian')}-{opts.get('suite', 'trixie')}-"
+            f"{opts.get('arch', 'amd64')}-ab.img")
+
+
 def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     """Return (command, label, env) to build an A/B image.
 
@@ -354,7 +365,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
             args += ["--tang-url", opts["tang_url"]]
     # The image name carries the architecture, so an amd64 and an arm64 build of
     # the same suite do not overwrite one another in /output.
-    out_name = f"{distro}-{suite}-{arch}-ab.img"
+    out_name = image_output_name(opts)
     # `-e VAR` (no value) makes the docker CLI forward VAR from its own env.
     script = (
         _binfmt_prelude(arch)

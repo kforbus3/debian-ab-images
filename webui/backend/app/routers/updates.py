@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app import orchestrator as orch
+from app import secretstore
 from app.deployments import deployments
 from app.jobs import jobs
 from app.security import require_auth
@@ -50,6 +51,15 @@ async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
     row = next((i for i in orch.list_images()[0] if i["name"] == image), {})
     encrypted = bool(row.get("meta", {}).get("encrypted"))
     passphrase = str(body.get("luks_passphrase") or "")
+    if encrypted and not passphrase:
+        # If the image was built with a generated passphrase, the store already
+        # has it filed under this image's name -- so this is the one place the
+        # integration pays for itself repeatedly rather than once.
+        try:
+            passphrase = await run_in_threadpool(secretstore.fetch_passphrase, image) or ""
+        except secretstore.SecretStoreError as exc:
+            raise HTTPException(502, f"could not read {image}'s passphrase from the "
+                                     f"secrets manager: {exc}")
     if encrypted and not passphrase:
         raise HTTPException(400, f"{image} is encrypted; its LUKS passphrase is needed "
                                  "to read the root slot. It is used only while building "

@@ -19,6 +19,11 @@ services:
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in webui/.env (long random string)}
       - HOST_PROJECT_DIR=${HOST_PROJECT_DIR:-}
       - PROJECT_DIR=/project
+      # Optional: a secrets-manager token for storing generated LUKS passphrases.
+      # Set here (via webui/.env) it stays out of the app's own config file on
+      # disk, and takes precedence over a token saved through the UI.
+      - BAO_TOKEN=${BAO_TOKEN:-}
+      - VAULT_TOKEN=${VAULT_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_PROJECT_DIR:-..}:/project

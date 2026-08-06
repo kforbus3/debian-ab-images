@@ -68,6 +68,9 @@ Usage: $0 [options]
   --encrypt               LUKS2-encrypt the root slots and overlay
   --unlock METHOD         passphrase|keyfile|tpm2|tang (default: $UNLOCK)
   --luks-passphrase PASS  LUKS passphrase (recovery + setup); required with --encrypt
+  --luks-passphrase-file F  Read the passphrase from a file (or - for stdin) instead.
+                          Prefer this over --luks-passphrase: an argument is visible
+                          in \`ps\` to every user on the build host.
   --tang-url URL          Tang server URL (required for --unlock tang)
   -h, --help              Show this help
 EOF
@@ -96,6 +99,18 @@ while [[ $# -gt 0 ]]; do
         --encrypt) ENCRYPT=true; shift;;
         --unlock) UNLOCK="$2"; shift 2;;
         --luks-passphrase) LUKS_PASS="$2"; shift 2;;
+        --luks-passphrase-file)
+            # Only the first line, and without its newline: a passphrase pasted
+            # into a file almost always ends with one, and including it produces
+            # a container that rejects the passphrase the operator believes they
+            # set -- discovered at an initramfs prompt, not here.
+            if [ "$2" = "-" ]; then IFS= read -r LUKS_PASS || true
+            else
+                [ -r "$2" ] || die "--luks-passphrase-file: cannot read '$2'"
+                IFS= read -r LUKS_PASS < "$2" || true
+            fi
+            [ -n "$LUKS_PASS" ] || die "--luks-passphrase-file: '$2' is empty"
+            shift 2;;
         --tang-url) TANG_URL="$2"; shift 2;;
         -h|--help) usage; exit 0;;
         *) echo "Unknown option: $1" >&2; usage; exit 1;;
