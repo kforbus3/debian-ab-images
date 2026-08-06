@@ -35,6 +35,7 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--encrypt` | off | LUKS2-encrypt the root slots and overlay |
 | `--unlock METHOD` | `keyfile` | Auto-unlock: `passphrase` \| `keyfile` \| `tpm2` \| `tang` |
 | `--luks-passphrase P` | — | LUKS passphrase (setup + recovery); required with `--encrypt` |
+| `--luks-passphrase-file F` | — | Read it from a file (or `-` for stdin) instead — keeps it out of `ps` |
 | `--tang-url URL` | — | Tang server URL (required for `--unlock tang`) |
 | `--compress` | `zstd` | `zstd` \| `gzip` \| `none` |
 | `--output PATH` | `/output/<distro>-<suite>-ab.img` | Output path (inside the container) |
@@ -225,6 +226,53 @@ make image ENCRYPT=1 UNLOCK=tang TANG_URL=http://tang.lan:7500 LUKS_PASSPHRASE='
 ```
 
 > The overlay auto-expand on first boot resizes the LUKS container too.
+
+### Storing the passphrase in a secrets manager
+
+With `tpm2`, `tang` or `keyfile`, the passphrase you pass is *only* a recovery
+key: nothing types it again, so nothing exercises it until the day a TPM is
+cleared by a firmware update and a machine stops at the initramfs prompt. That
+is a bad thing to keep in someone's password note.
+
+The web UI can generate it and file it in OpenBao or HashiCorp Vault for you —
+see [WEBUI.md](WEBUI.md#secrets-manager). On the command line,
+`scripts/luks-secret.sh` does the same against the `bao`/`vault` CLI and writes
+the same payload, so an image built either way is recoverable from the other:
+
+```bash
+export BAO_ADDR=https://bao.example.lan:8200 BAO_TOKEN=…
+
+# Generate a passphrase, store it, and stage it where the builder can read it
+./scripts/luks-secret.sh new debian-trixie-amd64-ab.img
+
+./builder/run.sh --encrypt --unlock tpm2 \
+    --luks-passphrase-file /output/.luks-pass \
+    --output /output/debian-trixie-amd64-ab.img
+
+./scripts/luks-secret.sh clean          # remove the staged file
+```
+
+`new` writes to the store *before* printing anything, and fails if the store
+will not take it — so a build never produces an encrypted image whose recovery
+key was not persisted first.
+
+Later, to bundle an update from that image (which needs the passphrase to read
+the root slot), or simply to recover a machine:
+
+```bash
+./scripts/luks-secret.sh stage debian-trixie-amd64-ab.img   # for the builder
+./scripts/luks-secret.sh show  debian-trixie-amd64-ab.img   # for a person
+```
+
+The passphrase is staged in a file rather than passed as an argument because
+arguments are visible in `ps` to every user on the build host; `output/` is
+already mounted into the builder, so the file needs no extra plumbing. The
+store is keyed on the image name with any `.zst`/`.gz` suffix stripped, so
+changing `--compress` does not strand the entry.
+
+Configuration comes from the environment, as both CLIs expect: `BAO_ADDR` /
+`VAULT_ADDR`, `BAO_TOKEN` / `VAULT_TOKEN`, plus `LUKS_KV_MOUNT` (default
+`secret`) and `LUKS_KV_PREFIX` (default `debian-ab-images`).
 
 ## Notes & limitations
 

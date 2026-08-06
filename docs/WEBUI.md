@@ -44,7 +44,55 @@ through the Docker socket.
   and see which versions the fleet is running. Installing a bundle writes the slot
   a machine is not running on and reboots into it, with automatic rollback if that
   slot fails to come up. See [UPDATES.md](UPDATES.md).
+- **Secrets manager** *(optional)* — connect OpenBao or HashiCorp Vault and have
+  encrypted builds generate their own LUKS recovery passphrase and file it under
+  the image's name, instead of somebody inventing one and keeping it in a note.
+  See below.
 - **Disk usage** at a glance on the dashboard.
+
+## Secrets manager
+
+An encrypted image needs a LUKS passphrase, and for every unlock method except
+`passphrase` it is *only* a recovery key — machines unlock from the TPM, from
+Tang, or from a keyfile, so nothing types it again until a TPM is cleared by a
+firmware update and a machine stops at the initramfs prompt.
+
+Under **Secrets Manager**, point the UI at an OpenBao or HashiCorp Vault KV v2
+mount (token or AppRole; namespace, private CA and mount point are all
+configurable). Then, on an encrypted build, tick *Generate a random passphrase
+and store it* — on by default for `tpm2`, `tang` and `keyfile`, off for
+`passphrase`, which somebody has to type at every boot.
+
+What happens then:
+
+- The backend generates 256 bits of randomness and **writes it to the store
+  before the build starts**. If the store will not take it, no image is built —
+  the reverse order can leave an encrypted image whose recovery key was never
+  persisted, and that is not recoverable.
+- The passphrase reaches the builder in `LUKS_PASS`, as a typed one does. **The
+  builder container never talks to the store**, so nothing privileged gains
+  network access or a store credential.
+- Building an **update bundle** from that image reads the passphrase back
+  automatically instead of prompting for it.
+- Encrypted images with a stored passphrase show a key icon in the image library;
+  clicking it reveals the passphrase, because the moment you need it is a machine
+  stopped at an initramfs prompt.
+
+Two things to get right:
+
+- **The credential needs write access**, not just read. A read-only policy passes
+  the connection test and fails the first build.
+- **Rebuilding the same image name files a new passphrase.** KV v2 keeps the old
+  version and machines already imaged still need it — which is why a KV v1 mount
+  is rejected.
+
+The store token can be set as `BAO_TOKEN` (or `VAULT_TOKEN`) in `webui/.env`
+instead of through the UI; it then takes precedence and never lands in the app's
+own config file. Everything saved through the UI goes to
+`output/.secrets-store.json`, mode 0600.
+
+The same thing is available on the command line via `scripts/luks-secret.sh` —
+see [BUILDER.md](BUILDER.md#storing-the-passphrase-in-a-secrets-manager).
 
 ## Running it
 

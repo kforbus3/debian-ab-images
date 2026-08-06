@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Hammer, HardDrive, ListChecks, Network, LogOut, Boxes, MonitorSmartphone, Server, Package } from "lucide-react";
+import { LayoutDashboard, Hammer, HardDrive, ListChecks, Network, LogOut, Boxes, MonitorSmartphone, Server, Package, KeyRound } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
 
@@ -13,6 +13,7 @@ const NAV = [
   { to: "/imaging", label: "Imaging", icon: MonitorSmartphone },
   { to: "/fleet", label: "Fleet", icon: Server },
   { to: "/updates", label: "Updates", icon: Package },
+  { to: "/secrets", label: "Secrets Manager", icon: KeyRound },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

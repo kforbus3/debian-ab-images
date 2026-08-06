@@ -31,8 +31,10 @@ export default function Build() {
     image_size: 0, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
+    store_passphrase: false,
     run_script: "", own_paths: "",
   });
+  const [store, setStore] = useState<{ configured: boolean; provider: string } | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string>("");
@@ -52,6 +54,9 @@ export default function Build() {
     api.get("/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
     loadImagerArches();
     api.get("/overlay").then((r) => setOverlay(r.data)).catch(() => {});
+    api.get("/secrets/config")
+      .then((r) => setStore({ configured: r.data.configured, provider: r.data.config.provider }))
+      .catch(() => setStore({ configured: false, provider: "" }));
     // Builds run for many minutes, so navigating away or reloading must not lose
     // the live log — reattach to whatever build is still running. The stream
     // replays the job's backlog before going live, so nothing is missed.
@@ -77,8 +82,13 @@ export default function Build() {
   }
 
   async function startImage() {
-    try { const { data } = await api.post("/builds", opts); await stream(data.id); }
-    catch (e) { toast.error(apiError(e)); }
+    try {
+      const { data } = await api.post("/builds", opts);
+      // Said once, at the moment it becomes true. The passphrase is written
+      // before the build starts, so this is already a fact rather than a plan.
+      if (data.passphrase_stored_at) toast.success(`Passphrase stored at ${data.passphrase_stored_at}`);
+      await stream(data.id);
+    } catch (e) { toast.error(apiError(e)); }
   }
   // The imager is built for the architecture selected above, because it is a
   // kernel the target machine runs: an amd64 imager cannot netboot an arm64
@@ -95,6 +105,14 @@ export default function Build() {
     catch (e) { toast.error(apiError(e)); }
   }
   const set = (k: string, v: any) => setOpts((o) => ({ ...o, [k]: v }));
+  // Generating and storing is the right default wherever the passphrase is only
+  // ever a recovery key — which is every unlock method except the one that
+  // prompts for it at every boot.
+  const generatable = (unlock: string) => !!store?.configured && unlock !== "passphrase";
+  const setEncrypt = (on: boolean) =>
+    setOpts((o) => ({ ...o, encrypt: on, store_passphrase: on && generatable(o.unlock) }));
+  const setUnlock = (unlock: string) =>
+    setOpts((o) => ({ ...o, unlock, store_passphrase: generatable(unlock) }));
   // The builder raises the root slot to a per-distro floor (Ubuntu's kernel
   // hard-depends on linux-firmware + linux-modules-extra, ~1.7 GiB Debian never
   // installs). Mirror that here so the size warning and the note below reflect
@@ -247,19 +265,43 @@ export default function Build() {
 
           <div className="mt-4 border-t border-zinc-800 pt-4">
             <label className="flex items-center gap-2 text-sm font-medium text-zinc-200">
-              <input type="checkbox" checked={opts.encrypt} onChange={(e) => set("encrypt", e.target.checked)} />
+              <input type="checkbox" checked={opts.encrypt} onChange={(e) => setEncrypt(e.target.checked)} />
               Encrypt disk (LUKS2)
             </label>
             {opts.encrypt && (
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <div><Label>Auto-unlock method</Label><Select value={opts.unlock} onChange={(e) => set("unlock", e.target.value)}>
+                <div><Label>Auto-unlock method</Label><Select value={opts.unlock} onChange={(e) => setUnlock(e.target.value)}>
                   <option value="tpm2">TPM2 (recommended)</option>
                   <option value="tang">Tang / NBDE (network)</option>
                   <option value="keyfile">Keyfile (universal, weaker)</option>
                   <option value="passphrase">Passphrase (no auto-unlock)</option>
                 </Select></div>
-                <div><Label>LUKS passphrase (recovery)</Label><Input type="password" value={opts.luks_passphrase} onChange={(e) => set("luks_passphrase", e.target.value)} placeholder="required" /></div>
+                <div><Label>LUKS passphrase (recovery)</Label><Input type="password" value={opts.luks_passphrase} onChange={(e) => set("luks_passphrase", e.target.value)} placeholder={opts.store_passphrase ? "generated" : "required"} disabled={opts.store_passphrase} /></div>
                 {opts.unlock === "tang" && <div className="col-span-2"><Label>Tang server URL</Label><Input value={opts.tang_url} onChange={(e) => set("tang_url", e.target.value)} placeholder="http://tang.lan:7500" /></div>}
+                {/* Offered for every unlock method, but defaulted on only where
+                    the passphrase is pure recovery material. Under
+                    unlock=passphrase somebody types it at every boot, and a
+                    43-character random string is the wrong answer for that. */}
+                {store?.configured && (
+                  <label className="col-span-2 flex items-start gap-2 text-sm text-zinc-300">
+                    <input type="checkbox" className="mt-0.5" checked={opts.store_passphrase}
+                           onChange={(e) => set("store_passphrase", e.target.checked)} />
+                    <span>
+                      Generate a random passphrase and store it in {store.provider === "vault" ? "Vault" : "OpenBao"}
+                      <span className="block text-xs text-zinc-500">
+                        Filed under this image's name before the build starts. If the store
+                        will not take it, nothing is built.
+                        {opts.unlock === "passphrase" && " This one is typed at every boot — a generated passphrase makes that painful."}
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {store && !store.configured && (
+                  <p className="col-span-2 text-xs text-zinc-500">
+                    Configure a secrets manager to have this passphrase generated and kept
+                    for you instead of typed here.
+                  </p>
+                )}
                 <p className="col-span-2 text-xs text-zinc-500">
                   {opts.unlock === "tpm2" && "Sealed to each machine's TPM on first boot; no key left on disk."}
                   {opts.unlock === "tang" && "Unlocks from a Tang server on your LAN; no key on disk."}
@@ -271,7 +313,7 @@ export default function Build() {
           </div>
 
           <Button className="mt-4 w-full" loading={running} onClick={startImage}
-            disabled={!opts.password || sizeTooSmall || (opts.encrypt && !opts.luks_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
+            disabled={!opts.password || sizeTooSmall || (opts.encrypt && !opts.luks_passphrase && !opts.store_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
             <Hammer size={15} /> {running ? "Building…" : "Start build"}
           </Button>
           {!opts.password && <p className="mt-2 text-xs text-amber-400">Set a login password to enable the build.</p>}
