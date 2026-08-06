@@ -135,6 +135,14 @@ jobs:
           # Nothing about that is visible until someone needs the recovery key.
           python tests/test_secretstore.py
 
+      - name: Overlay file management
+        working-directory: webui/backend
+        run: |
+          # These paths come from a browser and end up at open(). Most of what
+          # this asserts is refusal: `..` segments, absolute paths that escape
+          # on join, and symlinked directories pointing out of the tree.
+          python tests/test_overlay.py
+
       - name: Provisioning config renders for every architecture
         run: |
           # dnsmasq must hand an arm64 machine an arm64 bootloader; getting this

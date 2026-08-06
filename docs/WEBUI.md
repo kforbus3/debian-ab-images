@@ -19,6 +19,8 @@ through the Docker socket.
 - **Image library** — list, download, and delete built images, with distro/
   release/encryption metadata and SHA256 for each, and a **Deploy** button that
   points the provisioning server at an image.
+- **Image files** — create, upload, edit, move and delete the files copied into
+  every image, from the browser. See below.
 - **Job history** — past builds and their full logs survive UI restarts
   (persisted under `output/jobs/`).
 - **Turnkey provisioning** — the UI lists the host's network interfaces; pick the
@@ -49,6 +51,37 @@ through the Docker socket.
   the image's name, instead of somebody inventing one and keeping it in a note.
   See below.
 - **Disk usage** at a glance on the dashboard.
+
+## Image files
+
+`overlay.d/` holds your own files — the ones copied over the image's root
+filesystem, keeping their paths, so `/etc/hosts` here is `/etc/hosts` on every
+machine imaged from it. It is a directory in the repository, and it is also
+editable from the **Image Files** page: create a file and type its contents,
+upload one, change its mode, move it, or remove it.
+
+The same manager opens in a dialog from the Build page's *Customize the
+filesystem* panel, so files can be added mid-build without losing the form.
+
+Worth knowing:
+
+- **The mode is part of the file.** It is preserved into the image, so a script
+  shipped `0644` is a script that does not run on the machine — nothing warns
+  you, it simply sits there. The list has a one-click 0644/0755 toggle, and the
+  editor flags a path that looks like a program but is not executable.
+- **Deleting the last file in a directory removes the directory too.** An empty
+  `overlay.d/etc/netplan` would otherwise be copied into every image as an empty
+  `/etc/netplan`, which for netplan means a machine that boots with no network
+  configuration at all.
+- **Binary files are fine** — upload them and they are copied verbatim. They
+  just cannot be edited in the browser; download them instead.
+- Files over 1 MiB are shipped but not editable inline. Uploads are capped at
+  256 MiB.
+- Nothing here is committed: the directory is gitignored except its README.
+
+If the repository is mounted read-only into the UI container, the page says so
+and falls back to showing the host path — the files are the same directory
+either way.
 
 ## Secrets manager
 

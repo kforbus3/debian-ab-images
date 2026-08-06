@@ -10,6 +10,13 @@ Anything here is copied over the image's root filesystem, preserving paths:
 It is applied *after* the project's own overlay, so your version of a file wins
 over the default this repo ships.
 
+File permissions are preserved, so a script shipped `0644` is a script that does
+not run on the machine.
+
+You do not have to edit this directory by hand: the web UI's **Image Files**
+page manages exactly these files, and the Build page opens the same manager in a
+dialog. It is the same directory either way.
+
 ## These files also override the machine
 
 Every file here is recorded in the image as image-owned. The root filesystem on

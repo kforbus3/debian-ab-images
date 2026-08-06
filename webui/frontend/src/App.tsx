@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Build from "./pages/Build";
 import Images from "./pages/Images";
+import Files from "./pages/Files";
 import Jobs from "./pages/Jobs";
 import Provisioning from "./pages/Provisioning";
 import Imaging from "./pages/Imaging";
@@ -27,6 +28,7 @@ export default function App() {
       <Route path="/" element={<Protected><Dashboard /></Protected>} />
       <Route path="/build" element={<Protected><Build /></Protected>} />
       <Route path="/images" element={<Protected><Images /></Protected>} />
+      <Route path="/files" element={<Protected><Files /></Protected>} />
       <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
       <Route path="/provisioning" element={<Protected><Provisioning /></Protected>} />
       <Route path="/imaging" element={<Protected><Imaging /></Protected>} />

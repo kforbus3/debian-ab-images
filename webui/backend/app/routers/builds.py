@@ -77,19 +77,8 @@ async def preflight(_: str = Depends(require_auth)):
             "host_project_dir": orch.host_project_dir()}
 
 
-@router.get("/overlay")
-async def overlay(_: str = Depends(require_auth)):
-    """Files that will be copied into the next image, and what that means.
-
-    Shown in the UI so the effect of overlay.d is visible before a build rather
-    than discovered on a machine afterwards.
-    """
-    files = orch.overlay_files()
-    return {
-        "files": files,
-        "dir": f"{orch.host_project_dir()}/overlay.d",
-        "count": len(files),
-    }
+# GET /overlay and the rest of the file management it grew into live in
+# routers/overlay.py.
 
 
 @router.post("/builds")
