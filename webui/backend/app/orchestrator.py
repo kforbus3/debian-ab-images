@@ -8,7 +8,9 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 
 from app.config import settings
@@ -84,13 +86,63 @@ def host_overlay_dir() -> str:
     return f"{host_project_dir()}/overlay.d"
 
 
-def overlay_files() -> list[dict]:
-    """What the next build will copy into the image, so the UI can show it.
+def overlay_root() -> str:
+    """Your files, as seen from inside this container.
 
-    Read from this container's view of the repo rather than the host path: the
-    two are the same directory, and only one of them is readable from here.
+    Read and written through this path rather than the host one: they are the
+    same directory, and only this one exists from in here.
     """
-    root = os.path.join(PROJ, "overlay.d")
+    return os.path.join(PROJ, "overlay.d")
+
+
+# The README is this directory's documentation, not payload -- the builder's own
+# listing skips it, so a file of that name would be silently left out of every
+# image. Refused up front instead.
+OVERLAY_RESERVED = ("README.md",)
+
+
+class OverlayPathError(ValueError):
+    """A path that is not somewhere a file may be written. Message is user-facing."""
+
+
+def overlay_resolve(path: str) -> tuple[str, str]:
+    """Map an image path (`/etc/hosts`) to a file under overlay.d.
+
+    Returns (absolute path in this container, normalised image path).
+
+    Everything about this function is containment. The path arrives from the
+    browser and ends up at `open()`, so `..` segments, an absolute path that
+    escapes on join, and a symlink pointing out of the tree all have to be dead
+    before then -- the last one is why the parent is resolved with realpath
+    rather than trusting a textual check.
+    """
+    root = os.path.realpath(overlay_root())
+    rel = str(path or "").strip().replace("\\", "/").lstrip("/")
+    if not rel:
+        raise OverlayPathError("a path is required, e.g. /etc/hosts")
+    if any(part in ("..", ".") for part in rel.split("/")):
+        raise OverlayPathError("the path may not contain '.' or '..' segments")
+    if rel.endswith("/"):
+        raise OverlayPathError("the path must name a file, not a directory")
+    if len(rel) > 1024:
+        raise OverlayPathError("the path is too long")
+    if rel in OVERLAY_RESERVED:
+        raise OverlayPathError(
+            f"/{rel} is this directory's own documentation and is never copied "
+            "into an image. Choose another path.")
+    full = os.path.join(root, rel)
+    # The file itself need not exist yet; its parent chain must not lead out of
+    # the tree. realpath resolves symlinks, so a symlinked directory pointing at
+    # / is caught here rather than at open().
+    parent = os.path.realpath(os.path.dirname(full))
+    if parent != root and not parent.startswith(root + os.sep):
+        raise OverlayPathError("that path resolves outside overlay.d")
+    return full, "/" + rel
+
+
+def overlay_files() -> list[dict]:
+    """What the next build will copy into the image, so the UI can show it."""
+    root = overlay_root()
     out: list[dict] = []
     if not os.path.isdir(root):
         return out
@@ -98,15 +150,138 @@ def overlay_files() -> list[dict]:
         for fn in files:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, root)
-            if rel == "README.md":
+            if rel in OVERLAY_RESERVED:
                 continue
             try:
-                size = os.path.getsize(full)
+                st = os.stat(full)
             except OSError:
                 continue
-            out.append({"path": "/" + rel.replace(os.sep, "/"), "size": size})
+            out.append({
+                "path": "/" + rel.replace(os.sep, "/"),
+                "size": st.st_size,
+                # cp -a preserves the mode, so what is set here is what lands on
+                # the machine -- which makes it part of the file, not a detail.
+                "mode": format(stat.S_IMODE(st.st_mode), "04o"),
+                "executable": bool(st.st_mode & 0o111),
+                "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                                    .isoformat(timespec="seconds"),
+            })
     out.sort(key=lambda r: r["path"])
     return out
+
+
+def overlay_writable() -> str:
+    """Empty if files can be managed from here, else why not.
+
+    The repo is bind-mounted, and a read-only or root-owned mount is the one
+    failure that makes every write fail identically. Checked once, up front,
+    so the answer is a sentence rather than an errno per attempt.
+    """
+    root = overlay_root()
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError as exc:
+        return (f"overlay.d cannot be created ({exc.strerror}). The repository is "
+                f"mounted into this container at {PROJ}; it must be writable to "
+                f"manage files from here.")
+    if not os.access(root, os.W_OK | os.X_OK):
+        return (f"overlay.d is not writable by this container (uid {os.getuid()}). "
+                f"Check the permissions of the repository directory on the host.")
+    return ""
+
+
+def overlay_write(path: str, data: bytes, mode: int | None = None) -> dict:
+    """Create or replace one file, and any directories leading to it."""
+    full, image_path = overlay_resolve(path)
+    if os.path.isdir(full):
+        raise OverlayPathError(f"{image_path} is a directory")
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    # Written alongside and renamed: a half-written file here is a half-written
+    # file in the next image, and the rename makes the swap atomic.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(full), prefix=".overlay-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode if mode is not None else 0o644)
+        os.replace(tmp, full)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return {"path": image_path, "size": len(data),
+            "mode": format(mode if mode is not None else 0o644, "04o")}
+
+
+def overlay_read(path: str, max_bytes: int) -> dict:
+    """One file's contents, for editing in the browser."""
+    full, image_path = overlay_resolve(path)
+    if not os.path.isfile(full):
+        raise FileNotFoundError(image_path)
+    st = os.stat(full)
+    with open(full, "rb") as f:
+        raw = f.read(max_bytes + 1)
+    info = {"path": image_path, "size": st.st_size,
+            "mode": format(stat.S_IMODE(st.st_mode), "04o"),
+            "executable": bool(st.st_mode & 0o111)}
+    if st.st_size > max_bytes:
+        return {**info, "editable": False,
+                "reason": f"larger than {max_bytes // 1024} KiB"}
+    try:
+        return {**info, "editable": True, "content": raw.decode()}
+    except UnicodeDecodeError:
+        # A binary file is perfectly valid payload -- it just cannot be typed
+        # into a textarea. It stays in the image either way.
+        return {**info, "editable": False, "reason": "not text"}
+
+
+def overlay_chmod(path: str, mode: int) -> dict:
+    full, image_path = overlay_resolve(path)
+    if not os.path.isfile(full):
+        raise FileNotFoundError(image_path)
+    os.chmod(full, mode)
+    return {"path": image_path, "mode": format(mode, "04o")}
+
+
+def overlay_move(src: str, dst: str) -> dict:
+    full_src, src_path = overlay_resolve(src)
+    full_dst, dst_path = overlay_resolve(dst)
+    if not os.path.isfile(full_src):
+        raise FileNotFoundError(src_path)
+    if os.path.exists(full_dst):
+        raise OverlayPathError(f"{dst_path} already exists")
+    os.makedirs(os.path.dirname(full_dst), exist_ok=True)
+    os.replace(full_src, full_dst)
+    _overlay_prune(os.path.dirname(full_src))
+    return {"path": dst_path}
+
+
+def overlay_delete(path: str) -> dict:
+    full, image_path = overlay_resolve(path)
+    if not os.path.isfile(full):
+        raise FileNotFoundError(image_path)
+    os.remove(full)
+    _overlay_prune(os.path.dirname(full))
+    return {"path": image_path}
+
+
+def _overlay_prune(dirpath: str) -> None:
+    """Remove directories left empty by a delete or move, up to the root.
+
+    Without this, deleting overlay.d/etc/netplan/10-corp.yaml leaves an empty
+    etc/netplan behind, and `cp -a` would then create an empty /etc/netplan in
+    every image -- which for netplan specifically means a machine that comes up
+    with no network configuration at all.
+    """
+    root = os.path.realpath(overlay_root())
+    current = os.path.realpath(dirpath)
+    while current != root and current.startswith(root + os.sep):
+        try:
+            os.rmdir(current)
+        except OSError:
+            return
+        current = os.path.dirname(current)
 
 
 def _self_image() -> str:

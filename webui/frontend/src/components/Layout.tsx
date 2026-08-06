@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Hammer, HardDrive, ListChecks, Network, LogOut, Boxes, MonitorSmartphone, Server, Package, KeyRound } from "lucide-react";
+import { LayoutDashboard, Hammer, HardDrive, ListChecks, Network, LogOut, Boxes, MonitorSmartphone, Server, Package, KeyRound, FolderCog } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
 
@@ -8,6 +8,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/build", label: "Build Image", icon: Hammer },
   { to: "/images", label: "Images", icon: HardDrive },
+  { to: "/files", label: "Image Files", icon: FolderCog },
   { to: "/jobs", label: "Jobs", icon: ListChecks },
   { to: "/provisioning", label: "Provisioning", icon: Network },
   { to: "/imaging", label: "Imaging", icon: MonitorSmartphone },

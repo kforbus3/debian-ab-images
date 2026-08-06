@@ -115,6 +115,12 @@ Unlike `builder/overlay/`, the whole tree is copied, not just `etc/` and `usr/`,
 and it is applied afterwards — so your version of a file wins over the project's
 default. Everything there except its README is gitignored.
 
+The mode is preserved (`cp -a`), so a script shipped `0644` is a script that
+does not run on the machine. Nothing warns you: it lands, and it sits there.
+
+If you run the web UI, this directory is editable from the browser — see
+[WEBUI.md](WEBUI.md#image-files) — and it is the same directory either way.
+
 ### These files also override what is already on the machine
 
 This is the half that is easy to miss. A deployed machine's root is an overlay,

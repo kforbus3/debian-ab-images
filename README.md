@@ -131,7 +131,9 @@ make webui
 
 Open **http://localhost:8080** to build images (with a live build log), manage the
 image library, configure and start the provisioning server, and watch machines get
-imaged in real time. It can also connect to a secrets manager (OpenBao or
+imaged in real time. The files baked into every image (`overlay.d/`) are editable
+from the browser too, so site-specific configuration does not need a shell on the
+build host. It can also connect to a secrets manager (OpenBao or
 HashiCorp Vault) so encrypted builds generate their own LUKS recovery passphrase
 and file it under the image's name, rather than someone inventing one and keeping
 it in a note. See [docs/WEBUI.md](docs/WEBUI.md).

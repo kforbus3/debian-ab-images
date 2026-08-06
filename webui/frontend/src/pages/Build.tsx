@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Hammer, Cpu, XCircle } from "lucide-react";
+import { Hammer, Cpu, XCircle, FolderPlus } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
-import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert, ProgressBar } from "../components/ui";
+import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert, ProgressBar, Modal } from "../components/ui";
+import OverlayManager from "../components/OverlayManager";
 
 // One list, used for the Architecture selector and the imager buttons, so the
 // two can never drift apart.
@@ -44,6 +45,7 @@ export default function Build() {
   const [imagerArches, setImagerArches] = useState<Record<string, boolean> | null>(null);
   const [overlay, setOverlay] = useState<{ files: { path: string; size: number }[]; dir: string } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   const loadImagerArches = () =>
@@ -213,16 +215,25 @@ export default function Build() {
             {customOpen && (
               <div className="mt-3 space-y-4">
                 <div>
-                  <Label>Files copied into the image</Label>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <Label>Files copied into the image</Label>
+                    {/* Opened in a modal rather than linking to the Files page:
+                        this form holds a build's worth of settings, and
+                        navigating away to add a file would throw them away. */}
+                    <Button size="sm" variant="secondary" onClick={() => setFilesOpen(true)}>
+                      <FolderPlus size={13} /> Add or edit files
+                    </Button>
+                  </div>
                   {overlay && overlay.files.length > 0 ? (
                     <ul className="max-h-32 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-2 font-mono text-xs text-zinc-300">
                       {overlay.files.map((f) => <li key={f.path}>{f.path}</li>)}
                     </ul>
                   ) : (
                     <p className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">
-                      Nothing staged. Put files under{" "}
-                      <span className="text-zinc-300">{overlay?.dir || "overlay.d"}</span>{" "}
-                      and they are copied over the image root, keeping their paths.
+                      Nothing staged. Add a file and it is copied over the image root,
+                      keeping its path — <code className="text-zinc-300">/etc/hosts</code> here
+                      becomes <code className="text-zinc-300">/etc/hosts</code> on every machine
+                      imaged from it.
                     </p>
                   )}
                   {/* The shadowing rule is the surprising part, so it is stated
@@ -337,6 +348,14 @@ export default function Build() {
           <LogView lines={log} />
         </Card>
       </div>
+
+      <Modal open={filesOpen} onClose={() => setFilesOpen(false)} wide
+             title="Files copied into the image"
+             subtitle="Applied over the image root, keeping their paths. Changes take effect on the next build.">
+        {/* Refreshing the build form's own list on change keeps the summary
+            behind the modal honest the moment it closes. */}
+        <OverlayManager onChange={() => api.get("/overlay").then((r) => setOverlay(r.data)).catch(() => {})} />
+      </Modal>
     </div>
   );
 }
