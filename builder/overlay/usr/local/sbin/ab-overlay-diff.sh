@@ -35,13 +35,13 @@ files are shadowing a file from the image.
 
 Recovery, when a change here is the problem:
 
-  Reboot and choose "Recovery: Slot <A|B>, reset overlay" from the GRUB menu.
-  The upper layer is renamed to $OVL/upper.prev -- nothing is deleted -- and
-  the machine boots with a clean one. Copy anything you need back out of it.
+  Reboot and choose "Recovery: Slot <A|B>, reset writable state" from the GRUB
+  menu. Each store is renamed to $OVL/<name>.prev -- nothing is deleted -- and
+  the machine boots with empty ones. Copy anything you need back out of them.
 
-  "Recovery: Slot <A|B>, no overlay" boots the root slot exactly as imaged,
-  ignoring the overlay entirely. Use it to confirm whether a problem lives in
-  the image or in the changes on top of it.
+  "Recovery: Slot <A|B>, image as written" boots the root slot exactly as
+  imaged, applying no state manifest at all. Use it to confirm whether a
+  problem lives in the image or in what the machine wrote on top of it.
 EOF
 }
 
@@ -56,9 +56,39 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if ! findmnt -no FSTYPE / 2>/dev/null | grep -qx overlay; then
-    echo "${YEL}This machine is not running with an overlay root.${OFF}"
-    echo "Either it booted with ab.overlay=off, or the overlay could not be set"
+# What this machine's writable state is supposed to look like. Under the default
+# model that is one overlay over the whole root; under stateful or appliance the
+# root is read-only and only the enumerated paths are writable. Reading it here
+# is what keeps this tool honest on an image that is not the default -- without
+# it, everything a machine wrote to /home under a `persist /home` directive is
+# simply invisible, which is the failure mode this whole tool exists to prevent.
+CONF=/usr/lib/ab/state.conf
+MODEL=overlay
+OVERLAYS=""; OTHERS=""
+if [ -r "$CONF" ]; then
+    MODEL=$(awk '$1 == "model" { print $2; exit }' "$CONF")
+    OVERLAYS=$(awk '$1 == "overlay" { print $2 }' "$CONF")
+    OTHERS=$(awk '$1 == "persist" || $1 == "slot-private" || $1 == "volatile" \
+                  { print $1 " " $2 }' "$CONF")
+else
+    OVERLAYS="/"               # no manifest: an image built before they existed
+fi
+[ -n "$MODEL" ] || MODEL=overlay
+
+if [ -z "$OVERLAYS" ]; then
+    echo "${YEL}This image (model ${MODEL}) has no overlay, so nothing shadows the${OFF}"
+    echo "${YEL}image and there is nothing for this tool to compare.${OFF}"
+    [ -n "$OTHERS" ] && { echo ""; echo "Writable paths on this machine:"
+                          printf '%s\n' "$OTHERS" | sed 's/^/  /'; }
+    exit 0
+fi
+
+# A root overlay is only expected under the default model. Saying "not an
+# overlay root" on a stateful image would be reporting the design as a fault.
+if printf '%s\n' "$OVERLAYS" | grep -qx '/' && \
+   ! findmnt -no FSTYPE / 2>/dev/null | grep -qx overlay; then
+    echo "${YEL}This machine should have an overlay root and does not.${OFF}"
+    echo "Either it booted with ab.state=off, or the overlay could not be set"
     echo "up (dmesg | grep ab-overlay says which). Nothing to compare."
     exit 1
 fi
@@ -159,11 +189,30 @@ echo "${BOLD}${shadowing}${OFF} shadowing the image, ${BOLD}${added}${OFF} added
 [ "$ALL" = 0 ] && [ $((added + deleted)) -gt 0 ] && \
     echo "${DIM}(-a lists the added and deleted ones too)${OFF}"
 
+# Paths that are not in the overlay at all. Everything above walks the upper
+# layer, so a bind or a tmpfs is invisible to it -- and "invisible" is exactly
+# the wrong answer for the paths someone deliberately carved out. Say where they
+# go and, more usefully, whether the other slot sees the same thing.
+if [ -n "$OTHERS" ]; then
+    echo ""
+    echo "${BOLD}Writable paths outside the overlay${OFF}${DIM}  (nothing here shadows the image)${OFF}"
+    printf '%s\n' "$OTHERS" | while read -r verb mp; do
+        [ -n "$mp" ] || continue
+        case "$verb" in
+            persist)      note="shared with the other slot; survives updates";;
+            slot-private) note="private to slot ${SLOT:-?}; the other slot has its own";;
+            volatile)     note="tmpfs; discarded on reboot";;
+            *)            note="";;
+        esac
+        printf '  %-28s %s%s%s\n' "$mp" "$DIM" "$note" "$OFF"
+    done
+fi
+
 if [ "$shadowing" -gt 0 ]; then
     echo ""
     echo "The files above take precedence over the image on ${BOLD}both${OFF} slots, so an"
     echo "A/B update cannot replace them and booting the other slot will not"
     echo "leave them behind. If one of them is the problem, reboot and choose"
-    echo "${BOLD}Recovery: Slot <A|B>, reset overlay${OFF} from the GRUB menu -- the upper"
-    echo "layer is kept as ${BOLD}$OVL/upper.prev${OFF}, nothing is deleted."
+    echo "${BOLD}Recovery: Slot <A|B>, reset writable state${OFF} from the GRUB menu -- what"
+    echo "is set aside is kept as ${BOLD}$OVL/*.prev${OFF}, nothing is deleted."
 fi

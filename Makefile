@@ -16,6 +16,17 @@ COMPRESS ?= zstd
 # Extra packages to install into the image, space-separated
 # (e.g. `make image PACKAGES="vim curl qemu-guest-agent"`)
 PACKAGES ?=
+# Writable state: how much of the root a machine can change, and what the two
+# A/B slots share. overlay (default) = the whole root, shared. stateful = root
+# read-only, /home and /var persist. appliance = root read-only, only /data
+# survives an update. The four path lists are space-separated and work with any
+# model — see docs/BUILDER.md#writable-state.
+STATE_MODEL ?=
+PERSIST ?=
+SLOT_PRIVATE ?=
+VOLATILE ?=
+RESET_ON_UPDATE ?=
+KEEP_PATHS ?=
 # LUKS2 encryption: ENCRYPT=1 enables it; UNLOCK picks the method
 # (passphrase|keyfile|tpm2|tang); LUKS_PASSPHRASE is required with ENCRYPT=1
 ENCRYPT ?=
@@ -29,11 +40,17 @@ help: ## Show this help
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: image
-image: ## Build the A/B disk image into ./output (SUITE=trixie|bookworm|noble|jammy, PACKAGES="vim curl", ENCRYPT=1)
+image: ## Build the A/B disk image into ./output (SUITE=, PACKAGES=, ENCRYPT=1, STATE_MODEL=stateful|appliance)
 	./builder/run.sh --suite $(SUITE) $(if $(HOSTNAME),--hostname $(HOSTNAME)) \
 	  --username $(USERNAME) --password '$(PASSWORD)' \
 	  --image-size $(IMAGE_SIZE) --root-size $(ROOT_SIZE) --compress $(COMPRESS) \
 	  $(if $(PACKAGES),--packages "$(PACKAGES)") \
+	  $(if $(STATE_MODEL),--state-model $(STATE_MODEL)) \
+	  $(foreach p,$(PERSIST),--persist $(p)) \
+	  $(foreach p,$(SLOT_PRIVATE),--slot-private $(p)) \
+	  $(foreach p,$(VOLATILE),--volatile $(p)) \
+	  $(foreach p,$(RESET_ON_UPDATE),--reset-on-update $(p)) \
+	  $(foreach p,$(KEEP_PATHS),--keep-path $(p)) \
 	  $(if $(ENCRYPT),--encrypt --unlock $(UNLOCK) \
 	    $(if $(LUKS_PASSPHRASE),--luks-passphrase '$(LUKS_PASSPHRASE)') \
 	    $(if $(TANG_URL),--tang-url $(TANG_URL)))

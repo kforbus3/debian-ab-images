@@ -25,11 +25,51 @@ Flow (`build-image.sh`):
 
 ### Disk layout & boot
 
-`/boot` and the kernel are **shared**; A/B applies to the **root filesystem**.
-GRUB's prefix is on the `BOOT` partition; `grub.cfg` selects a slot from `ORDER`
-and per-slot `TRY` counters in `grubenv`, then boots `root=LABEL=rootfs-a|b`.
-This mirrors RAUC's documented GRUB integration, so RAUC can flip slots by editing
-`grubenv`.
+The `BOOT` **partition** is shared, but the kernel is not: each slot has its own
+`vmlinuz` and `initrd.img` under `/A/` and `/B/`, so an update replaces the
+inactive slot's kernel without touching the running one and a rollback gets the
+kernel it was built against. `ab-sync-boot.sh` maintains those copies;
+`ab-kernel-hook.sh` says plainly that an apt-installed kernel will not be booted.
+
+GRUB's prefix is on the `BOOT` partition; `grub.cfg` selects a slot from `ORDER`,
+per-slot `TRY` counters and `_OK` flags in `grubenv`, then boots
+`root=LABEL=rootfs-a|b`. This mirrors RAUC's documented GRUB integration, so RAUC
+can flip slots by editing `grubenv`.
+
+### Writable state
+
+A/B replaces the root filesystem, so everything a machine writes has to live
+somewhere that survives that — the `overlay` partition. **How much of the root
+that covers is a property of the image**, declared in a manifest at
+`/usr/lib/ab/state.conf` and applied by the initramfs
+(`scripts/local-bottom/ab-overlay`) before the switch to root.
+
+Five directives. `overlay`, `persist`, `slot-private` and `volatile` say where a
+path's writes go; `reset-on-update` and `keep` say what a slot change does to
+them:
+
+| directive | mounted as | backing store | shared between slots? |
+| --- | --- | --- | --- |
+| `overlay PATH` | overlayfs, lower = the slot's copy | `upper/PATH` | yes |
+| `persist PATH` | bind | `persist/PATH` | yes |
+| `slot-private PATH` | bind | `slots/<A\|B>/PATH` | no |
+| `volatile PATH [SIZE]` | tmpfs | — | no, and not across reboots |
+
+`--state-model` picks the starting manifest; the per-path flags append to it.
+See [BUILDER.md](BUILDER.md#writable-state) for what each model contains and
+when to choose it.
+
+Two rules the engine enforces, both learned the hard way:
+
+- **Clearing a path means something different per store.** Under an overlay,
+  deleting the upper copy uncovers the image's. Under a bind there is nothing
+  underneath, so the same delete would destroy the file rather than revert it —
+  bind stores are re-seeded from the image after clearing.
+- **A model change cannot ride an update.** The machine records its model in
+  `/var/lib/overlay/.model`. An image declaring a different one is refused at
+  boot and the slot is booted untouched, because applying it would leave every
+  existing file on the partition but in the wrong store — indistinguishable,
+  from inside, from having been wiped. Changing models means re-imaging.
 
 ## 2. Imager (`imager/`)
 

@@ -90,6 +90,15 @@ fi
 undo() {                       # leave the slot exactly as it was found
     umount /ab-rw 2>/dev/null || true
     umount /ab-lower 2>/dev/null || true
+    # Under the stateful and appliance models GRUB passes `ro`, because
+    # everything writable is supposed to come from the manifest -- which is
+    # exactly what is not being applied here. Left alone, the fallback would
+    # boot to a system with nowhere to write anything, which is not a fallback.
+    # Writes land on the slot and an update will replace them; that is the
+    # correct trade for a machine that would otherwise not come up.
+    if mount -o remount,rw "$rootmnt" 2>/dev/null; then
+        msg "  remounted the slot read-write so the machine can still be used"
+    fi
     msg "$1 -- booting the slot directly"
     exit 0
 }
@@ -156,13 +165,29 @@ seed_store() {                 # seed_store <store path> <source path>
     mkdir -p "$(parent_of "$1")" 2>/dev/null || return 1
     [ -e "$2" ] || return 0    # not in the image either; correctly absent
     remove_path "$1.new" || true
+    # A partial copy is the worst outcome available here. The overlay partition
+    # ships at its minimum and is not grown until first-boot-expand runs, well
+    # after this -- so seeding a large /var into it could fill it partway, and
+    # what came out was a machine with a truncated /var bound over the real one:
+    # not a crash, boots, looks almost right. build-image.sh now refuses to ship
+    # a manifest that cannot fit, and this is the second line of defence: if the
+    # copy fails for any reason the half-built store is thrown away, the
+    # directive fails, and the path stays on the slot where it is at least
+    # complete.
     if [ -d "$2" ]; then
         mkdir -p "$1.new" || return 1
-        cp -a "$2/." "$1.new/" 2>/dev/null || \
-            msg "  WARNING: could not seed $1 from the image"
+        if ! cp -a "$2/." "$1.new/" 2>/dev/null; then
+            msg "  WARNING: could not seed $1 from the image (out of space?);"
+            msg "           discarding the partial copy and leaving $2 on the slot"
+            remove_path "$1.new"
+            return 1
+        fi
     else
-        cp -a "$2" "$1.new" 2>/dev/null || \
-            { msg "  WARNING: could not seed $1 from the image"; return 1; }
+        if ! cp -a "$2" "$1.new" 2>/dev/null; then
+            msg "  WARNING: could not seed $1 from the image"
+            remove_path "$1.new"
+            return 1
+        fi
     fi
     mv "$1.new" "$1" 2>/dev/null || { remove_path "$1.new"; return 1; }
     return 0
@@ -426,7 +451,19 @@ apply_overlay() {              # apply_overlay <path>
 
 apply_bind() {                 # apply_bind <path> <store root>
     _p="$1"; _store="$2$1"; _tgt="$rootmnt$1"
+    # A seed that failed is not the same as a path the image does not ship.
+    # seed_store returns 0 for the latter and leaves no store, which the mkdir
+    # below then creates empty -- correct. It returns 1 only when a copy it
+    # should have made did not work, and binding an empty store over a /var the
+    # image did populate would hand the machine a blank one.
     seed_store "$_store" "/ab-lower$_p" || return 1
+    # A path the image does not ship -- /var/lib/docker on an image with no
+    # docker yet, which is the normal case -- still has to be backed by the
+    # store. Without this the bind has no source, fails, and the directive
+    # quietly does nothing: writes fall through to whatever the model does by
+    # default, so a slot-private path ends up shared and looks fine until the
+    # first slot change hands the other slot someone else's data.
+    [ -e "$_store" ] || mkdir -p "$_store" 2>/dev/null || return 1
     [ -d "$_tgt" ] || mkdir -p "$_tgt" 2>/dev/null || return 1
     bind_mount "$_store" "$_tgt"
 }

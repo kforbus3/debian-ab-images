@@ -27,13 +27,18 @@ SCRIPT="${SCRIPT:-/repo/builder/overlay/etc/initramfs-tools/scripts/local-bottom
 [ -r "$SCRIPT" ] || { echo "HARNESS-FAIL: no $SCRIPT"; exit 1; }
 modprobe overlay 2>/dev/null || true
 
+# Every log-based assertion here is paired with a behavioural one. What the
+# script did matters more than what it said, and the two fail independently --
+# a refusal that works but is never printed leaves an operator with no idea why
+# their update did nothing.
+
 WORK=/tmp/abtest
 PASS=0; FAIL=0
 CASE=""
 
 ok()   { echo "    ok    $*"; PASS=$((PASS+1)); }
 bad()  { echo "    FAIL  $*"; FAIL=$((FAIL+1)); }
-check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+check(){ ensure_ovl; if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # --- fixture ------------------------------------------------------------------
 # A fake root slot with enough shape to be interesting: something the
@@ -121,19 +126,32 @@ run_engine() {                  # run_engine "<cmdline>"
     mount -o bind "$WORK/slot" "$WORK/root"
     set_cmdline "$1"
     # msg() prefers /dev/kmsg, which in a privileged container is the real
-    # kernel ring buffer, so most of what the script says never reaches stdout.
-    # Two attempts at redirecting it were both wrong: binding a regular file
-    # over it captures only the last line, because msg() uses `>` and every
-    # message truncates the one before; binding a directory does not mount at
-    # all, because you cannot bind a directory over a device node -- and with
-    # the error suppressed that looked exactly like it had worked.
+    # kernel ring buffer -- so by default almost nothing the script says reaches
+    # stdout. Three ways of getting it back were wrong before this one:
     #
-    # So read the ring buffer instead, by position, and leave the script's own
-    # output path completely alone.
-    local pre; pre=$(dmesg 2>/dev/null | wc -l)
-    rootmnt="$WORK/root" sh "$SCRIPT" > "$WORK/stdout.log" 2>&1
+    #   a regular file bound over /dev/kmsg keeps only the last line, because
+    #   msg() uses `>` and each message truncates the one before;
+    #   a directory does not bind over a device node at all, and with the error
+    #   suppressed that looked exactly like it had worked;
+    #   reading the ring buffer back with dmesg loses lines to printk rate
+    #   limiting, which no sysctl here reliably turns off (23 of 40 survived).
+    #
+    # /dev/full is a character device whose every write fails with ENOSPC. Bound
+    # over /dev/kmsg it sends msg() down the fallback branch it already has, so
+    # the whole log arrives on stdout, in order, with nothing dropped.
+    mount -o bind /dev/full /dev/kmsg 2>/dev/null
+    rootmnt="$WORK/root" sh "$SCRIPT" > "$WORK/out.log" 2>&1
     ENGINE_RC=$?
-    { dmesg 2>/dev/null | tail -n +$((pre + 1)); cat "$WORK/stdout.log"; } > "$WORK/out.log"
+    umount /dev/kmsg 2>/dev/null
+}
+
+# After a refusal the engine unmounts the overlay partition, which is correct --
+# it is leaving the machine as it found it -- but it also means an assertion
+# about what is on that partition has nothing to read. Put it back first.
+ensure_ovl() {
+    awk '$2 == "/ab-rw" { found = 1 } END { exit !found }' /proc/mounts && return 0
+    [ -n "${LOOP:-}" ] && mount "$LOOP" /ab-rw 2>/dev/null
+    return 0
 }
 
 # The container's own root is overlayfs, so "is / an overlay" cannot be asked
@@ -241,6 +259,8 @@ teardown
 run_engine "root=LABEL=rootfs-a rauc.slot=A ab.state=reset"
 check "refusal was logged"              'grep -q "reset refused" "$WORK/out.log"'
 check "the first snapshot survived"     '[ "$(cat /ab-rw/upper.prev/etc/motd)" = first ]'
+check "the reset did not happen"        '[ "$(cat /ab-rw/upper/etc/motd)" = second ]'
+check "no second snapshot was made"     '[ ! -e /ab-rw/upper.prev.prev ]'
 finish
 
 # =============================================================================
@@ -288,6 +308,67 @@ check "B is still seeded from the image" '[ -f "$R/var/log/.shipped" ]'
 echo "b-logs" > "$R/var/log/syslog"
 check "B writes to its own store"       '[ -f /ab-rw/slots/B/var/log/syslog ]'
 check "A's copy is still there"         '[ "$(cat /ab-rw/slots/A/var/log/syslog)" = a-logs ]'
+finish
+
+# =============================================================================
+# The image ships no /var/lib/docker -- docker is not installed yet -- and that
+# is the normal case for the paths people most want kept apart. An earlier
+# version skipped the store when the image had nothing to seed from, so the bind
+# had no source, failed, and the writes went to the shared overlay instead: the
+# directive read as applied and the two slots shared the directory anyway.
+begin "slot-private for a path the image does not ship"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+slot-private /var/lib/docker
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the store was created empty"     '[ -d /ab-rw/slots/A/var/lib/docker ]'
+check "it is a bind, not the overlay"   '[ "$(findmnt -no SOURCE "$R/var/lib/docker" 2>/dev/null | tail -1)" != ab-root ]'
+echo "a-data" > "$R/var/lib/docker/f"
+check "writes reach the slot store"     '[ -f /ab-rw/slots/A/var/lib/docker/f ]'
+check "nothing reached the shared upper" '[ ! -f /ab-rw/upper/var/lib/docker/f ]'
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "slot B does not see A's data"    '[ ! -f "$R/var/lib/docker/f" ]'
+finish
+
+# =============================================================================
+begin "persist for a path the image does not ship"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+persist /srv/data
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the store was created empty"     '[ -d /ab-rw/persist/srv/data ]'
+echo "a-data" > "$R/srv/data/f"
+check "writes reach the persist store"  '[ -f /ab-rw/persist/srv/data/f ]'
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "slot B sees it (shared)"         '[ "$(cat "$R/srv/data/f")" = a-data ]'
+finish
+
+# =============================================================================
+# The overlay partition ships at its minimum and is not grown until
+# first-boot-expand runs, long after this. Seeding more than fits filled it
+# partway through and left a truncated /var bound over the real one -- a machine
+# that boots, looks almost right, and is missing files nobody thinks to check.
+# build-image.sh now refuses to ship such a manifest; this is the other half.
+begin "a seed that does not fit is discarded, not half-applied"
+mkdir -p "$WORK/slot/bulk"
+dd if=/dev/zero of="$WORK/slot/bulk/big" bs=1M count=700 2>/dev/null
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+persist /bulk
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the failure was reported"        'grep -q "could not seed" "$WORK/out.log"'
+check "no partial store was left"       '[ ! -e /ab-rw/persist/bulk ] && [ ! -e /ab-rw/persist/bulk.new ]'
+check "the path was left on the slot"   '[ "$(findmnt -no SOURCE "$R/bulk" 2>/dev/null | tail -1)" != ext4 ]'
+check "the image copy is still readable" '[ -f "$R/bulk/big" ]'
+check "the rest of the manifest applied" 'is_ab_overlay "$R"'
 finish
 
 # =============================================================================
@@ -372,6 +453,8 @@ persist /home
 EOF
 run_engine "root=LABEL=rootfs-b rauc.slot=B"
 check "the change was refused"          'grep -q "REFUSING" "$WORK/out.log"'
+check "the recorded model is unchanged" '[ "$(cat /ab-rw/.model)" = overlay ]'
+check "no store for the new model"      '[ ! -d /ab-rw/persist ]'
 check "root is not an overlay"          '! is_ab_overlay "$R"'
 check "/home was not rebound"           '[ "$(findmnt -no FSTYPE "$R/home" 2>/dev/null | tail -1)" != ext4 ]'
 finish

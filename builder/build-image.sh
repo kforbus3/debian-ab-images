@@ -24,7 +24,7 @@ PASSWORD="${PASSWORD:-debian}"
 ROOT_SIZE="${ROOT_SIZE:-3072}"
 BOOT_SIZE="${BOOT_SIZE:-512}"
 ESP_SIZE="${ESP_SIZE:-128}"
-OVERLAY_MIN="${OVERLAY_MIN:-256}"       # overlay grows to fill the disk on first boot
+OVERLAY_MIN="${OVERLAY_MIN:-}"          # empty = from the state model; see below
 IMAGE_SIZE="${IMAGE_SIZE:-auto}"        # GiB, or "auto" = smallest possible
 OUTPUT="${OUTPUT:-}"                    # empty = /output/<distro>-<suite>-ab.img
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
@@ -38,6 +38,7 @@ SSH_PUBKEY="${SSH_PUBKEY:-}"
 # distribution owns are cleared from it whenever the slot changes.
 STATE_MODEL="${STATE_MODEL:-overlay}"
 MOUNT_DIRECTIVES="overlay /"
+EXTRA_MOUNTS=""                          # from --persist/--slot-private/--volatile
 # Cleared from the writable state on a slot change. Everything the distribution
 # owns: a copy of these from the previous release would shadow the one the
 # update just installed, and nothing in the running system would say so.
@@ -77,6 +78,30 @@ Usage: $0 [options]
   --own-path PATH         Path the image owns: cleared from the persistent
                           overlay on update so the image version wins.
                           Repeatable. Everything in --overlay-dir is implied.
+
+ Writable state -- what the machine can change, and what the A/B slots share.
+ By default the whole root is one overlay shared by both slots. These carve
+ exceptions out of that; all are repeatable and take absolute paths.
+  --persist PATH          Bind PATH to its own directory on the overlay
+                          partition: still shared by both slots, but outside
+                          the overlay, so an update never shadows it.
+  --slot-private PATH     Give each slot its own PATH. Nothing written here in
+                          one slot is visible from the other -- use it for
+                          state tied to the release, e.g. /var/lib/docker.
+  --volatile PATH[:SIZE]  tmpfs over PATH: not shared, not kept across a
+                          reboot. SIZE caps it (e.g. /var/tmp:256M).
+  --reset-on-update PATH  Also clear PATH from writable state when the slot
+                          changes, so the new release starts from its own copy.
+  --keep-path PATH        Hold PATH back from that clearing, even when it sits
+                          inside something being cleared (as /usr/local does).
+  --state-model NAME      overlay|stateful|appliance (default: $STATE_MODEL).
+                          overlay   whole root overlaid, shared by both slots
+                          stateful  root read-only; /home /var /usr/local persist
+                          appliance root read-only; only /data survives an update
+  --overlay-min MiB       Overlay partition size as built. It expands to fill
+                          the disk on first boot, so this only has to hold what
+                          the manifest seeds before that happens (default: 256,
+                          or 1024 when anything is persisted).
   --ssh-pubkey FILE       Authorized SSH key file for the user
   --ssh-authorized-key K  Authorized SSH key passed inline
   --ssh-key-only          Disable SSH password auth (requires an SSH key)
@@ -108,6 +133,17 @@ while [[ $# -gt 0 ]]; do
         --overlay-dir) OVERLAY_D="$2"; shift 2;;
         --run-script) RUN_SCRIPT="$2"; shift 2;;
         --own-path) OWN_PATHS="$OWN_PATHS $2"; shift 2;;
+        --state-model)     STATE_MODEL="$2"; shift 2;;
+        --overlay-min)     OVERLAY_MIN="$2"; shift 2;;
+        --persist)         EXTRA_MOUNTS="$EXTRA_MOUNTS
+persist $2"; shift 2;;
+        --slot-private)    EXTRA_MOUNTS="$EXTRA_MOUNTS
+slot-private $2"; shift 2;;
+        --volatile)        # PATH or PATH:SIZE -- the manifest wants them apart
+            EXTRA_MOUNTS="$EXTRA_MOUNTS
+volatile ${2%%:*} $(case "$2" in *:*) echo "${2##*:}";; esac)"; shift 2;;
+        --reset-on-update) RESET_PATHS="$RESET_PATHS $2"; shift 2;;
+        --keep-path)       KEEP_PATHS="$KEEP_PATHS $2"; shift 2;;
         --ssh-pubkey) SSH_PUBKEY="$(cat "$2")"; shift 2;;
         --ssh-authorized-key) SSH_PUBKEY="$2"; shift 2;;
         --ssh-key-only) SSH_KEY_ONLY=true; shift;;
@@ -147,6 +183,124 @@ step() {
     printf '[progress] %d/%d %s\n' "$BUILD_STEP" "$BUILD_STEPS" "$1"
     log "$1"
 }
+
+# --- Resolve the writable-state layout --------------------------------------
+#
+# Validated here, before anything is built, because every one of these mistakes
+# is otherwise discovered at a boot prompt on a machine that has already been
+# imaged. A manifest is applied by an initramfs with no way to ask a question
+# and nobody watching, so it has to be right before it ships.
+# A model is a starting manifest, not a mode: --persist and friends append to
+# whichever one is chosen. The three differ in one thing -- how much of the root
+# a machine is allowed to write to -- and that is the axis every other A/B
+# system picks a point on too.
+ROOT_FLAG=rw                   # what GRUB passes for the root slot
+case "$STATE_MODEL" in
+    overlay)
+        # The whole root is one overlay shared by both slots, and the paths the
+        # distribution owns are clawed back on a slot change. Everything a
+        # person does to the machine survives an update, including `apt install`
+        # -- which is the point on a general-purpose Debian fleet, and the
+        # reason this is the default.
+        :;;
+    stateful)
+        # /usr is the image's and cannot be written at all, so nothing a machine
+        # does can shadow a binary the update just delivered. What a machine
+        # owns is enumerated instead: /home, /var, /usr/local and the rest are
+        # real directories on the overlay partition, and /etc is a small overlay
+        # so the image can still ship config that wins. This is the shape
+        # ChromeOS uses.
+        ROOT_FLAG=ro
+        MOUNT_DIRECTIVES="overlay /etc
+persist /home
+persist /root
+persist /srv
+persist /opt
+persist /usr/local
+persist /var"
+        RESET_PATHS="/var/lib/dpkg /var/lib/apt /var/cache/apt"
+        KEEP_PATHS=""
+        ;;
+    appliance)
+        # Only /data survives an update. /etc stays editable because an operator
+        # has to be able to configure the thing, but /var reverts to the image's
+        # copy on every slot change, so the machine cannot accumulate state the
+        # next release did not expect. This is the shape Android and the
+        # RAUC/Mender reference layouts use, and `apt install` does not survive
+        # it -- deliberately.
+        ROOT_FLAG=ro
+        MOUNT_DIRECTIVES="overlay /etc
+overlay /var
+persist /data"
+        RESET_PATHS="/var"
+        # LUKS enrolment writes the unlock key here after the image was built.
+        # Reverting /etc would undo it and the machine would come up asking for
+        # a passphrase with nobody there to type it.
+        KEEP_PATHS="/etc/cryptsetup-keys.d"
+        ;;
+    *) die "--state-model: unknown model '$STATE_MODEL' (expected: overlay, stateful, appliance)";;
+esac
+
+MOUNT_DIRECTIVES="$MOUNT_DIRECTIVES$EXTRA_MOUNTS"
+
+while read -r _verb _mp _arg; do
+    [ -n "$_verb" ] || continue
+    case "$_mp" in
+        /) die "--$_verb: / is the whole root; that is what --state-model decides";;
+        /*) ;;
+        *) die "--$_verb: path must be absolute (got '$_mp')";;
+    esac
+    case "$_mp" in
+        */) die "--$_verb: drop the trailing slash from '$_mp'";;
+        *..*) die "--$_verb: '..' is not allowed in '$_mp'";;
+    esac
+done <<EOF
+$(printf '%s\n' "$EXTRA_MOUNTS" | grep -v '^[[:space:]]*$')
+EOF
+
+# Two directives on one path is not a merge, it is a race: whichever the
+# initramfs applies second silently wins, and from inside the running machine
+# there is no way to tell which one that was. Checked across the model's own
+# directives too, so `--state-model stateful --persist /var` is caught rather
+# than quietly overriding half of the model.
+_dupes=$(printf '%s\n' "$MOUNT_DIRECTIVES" | awk 'NF >= 2 { print $2 }' | sort | uniq -d)
+[ -z "$_dupes" ] || die "more than one directive for: $(echo $_dupes); pick one per path"
+
+# Nested overlays would each need their own lower bind, which the engine does
+# not do. No model produces one; this catches a future one that tries.
+_ovl=$(printf '%s\n' "$MOUNT_DIRECTIVES" | awk '$1 == "overlay" { print $2 }')
+for _a in $_ovl; do for _b in $_ovl; do
+    if [ "$_a" != "$_b" ]; then
+        # "/" needs saying separately: "$_b"/* expands to "//*" for it, which
+        # matches nothing, so the one case that matters most would slip through.
+        if [ "$_b" = "/" ]; then die "overlay '$_a' nests inside overlay '/'"; fi
+        case "$_a" in "$_b"/*) die "overlay '$_a' nests inside overlay '$_b'";; esac
+    fi
+done; done
+
+for _p in $RESET_PATHS $KEEP_PATHS; do
+    case "$_p" in
+        /*) ;;
+        *) die "--reset-on-update/--keep-path: path must be absolute (got '$_p')";;
+    esac
+done
+
+# How big the overlay partition has to be *as built*, before the machine ever
+# runs. It normally ships at its minimum and first-boot-expand grows it to fill
+# the disk -- which is what keeps an image small enough to stream over PXE.
+#
+# But a `persist` or `slot-private` directive seeds its store from the image
+# during the initramfs, which is before first-boot-expand has run: the partition
+# has been grown by the imager, the filesystem inside it has not. Seeding /var
+# into a 256 MiB filesystem fills it partway through, and what came out the other
+# side was a machine with a truncated /var, no /usr/local, and nothing said.
+if [ -z "$OVERLAY_MIN" ]; then
+    if printf '%s\n' "$MOUNT_DIRECTIVES" | grep -qE '^(persist|slot-private) '; then
+        OVERLAY_MIN=1024
+    else
+        OVERLAY_MIN=256
+    fi
+fi
 
 # --- Resolve distro (auto-detect from suite when not given) ---
 if [ -z "$DISTRO" ]; then
@@ -650,6 +804,25 @@ fi
 # not boot, whereas this has coreutils and can simply get the order right.
 STATE_CONF="$MNT/usr/lib/ab/state.conf"
 step "Writing the state manifest ($STATE_MODEL)"
+
+# Every directive needs its mountpoint to exist in the image.
+#
+# Under the default model the initramfs can just create a missing one, because
+# the root is writable. Under stateful and appliance it is not, and `mkdir` on a
+# read-only root fails -- which is how `persist /data` on an appliance image
+# turned into a directive that silently did nothing, on the one path the whole
+# model exists to provide. The image is where a mountpoint belongs anyway: it is
+# part of the filesystem layout, not of the machine's state.
+while read -r _verb _mp _arg; do
+    [ -n "$_mp" ] || continue
+    [ "$_mp" = "/" ] && continue
+    if [ ! -d "$MNT$_mp" ]; then
+        mkdir -p "$MNT$_mp"
+        log "  created mountpoint $_mp (the image did not have one)"
+    fi
+done <<EOF
+$(printf '%s\n' "$MOUNT_DIRECTIVES" | grep -v '^[[:space:]]*$')
+EOF
 {
     echo "# Generated by build-image.sh -- how this image lays out writable state."
     echo "# Applied by /etc/initramfs-tools/scripts/local-bottom/ab-overlay at boot."
@@ -662,6 +835,39 @@ step "Writing the state manifest ($STATE_MODEL)"
     for p in $KEEP_PATHS;   do echo "keep $p"; done
 } > "$STATE_CONF"
 log "  $(grep -cvE '^\s*(#|$)' "$STATE_CONF") directive(s)"
+
+# Will the seeding actually fit? Everything above is a guess made before
+# debootstrap ran; this is the measurement, made against the real tree, and it
+# is a hard failure rather than a warning. The alternative is an image that
+# builds cleanly and produces a machine with a half-copied /var -- which is not
+# a crash, boots, and looks almost right.
+SEED_KIB=0
+while read -r _verb _mp _arg; do
+    case "$_verb" in persist|slot-private) ;; *) continue;; esac
+    [ -d "$MNT$_mp" ] || continue
+    _k=$(du -sk "$MNT$_mp" 2>/dev/null | cut -f1)
+    [ -n "$_k" ] || continue
+    # A slot-private path is seeded once per slot, so it lands twice.
+    [ "$_verb" = slot-private ] && _k=$((_k * 2))
+    SEED_KIB=$((SEED_KIB + _k))
+done <<EOF
+$(printf '%s\n' "$MOUNT_DIRECTIVES" | grep -v '^[[:space:]]*$')
+EOF
+
+if [ "$SEED_KIB" -gt 0 ]; then
+    AVAIL_KIB=$(df -Pk "$MNT/var/lib/overlay" | awk 'NR==2 {print $4}')
+    # 25% headroom: the machine writes to these stores from the moment it boots,
+    # and an overlay partition that is exactly full at first boot is one that
+    # fails on the first log line instead of during the copy.
+    NEED_KIB=$((SEED_KIB * 5 / 4))
+    log "  seeds ${SEED_KIB} KiB into the overlay at first boot (${AVAIL_KIB} KiB free)"
+    if [ "$NEED_KIB" -gt "$AVAIL_KIB" ]; then
+        die "the overlay partition is too small for what this manifest seeds.
+    It holds $((AVAIL_KIB / 1024)) MiB and needs about $((NEED_KIB / 1024)) MiB at first boot,
+    before first-boot-expand has grown the filesystem.
+    Rebuild with --overlay-min $(( (NEED_KIB / 1024) + 256 ))"
+    fi
+fi
 
 if [ "$ENCRYPT" = true ]; then
     sed -i "s|^device=/dev/disk/by-partlabel/rootfs-a|device=/dev/mapper/luks-rootfs-a|; \
@@ -683,9 +889,9 @@ ln -sf ab-sync-boot.sh    "$MNT/usr/local/sbin/ab-sync-boot"
 # on every login rather than leaving it to documentation on another computer.
 cat > "$MNT/etc/motd" <<'MOTD'
 
-  A/B image-based system.  Root is an overlay: the image is read-only
-  underneath, and everything written since imaging lives on the overlay
-  partition, shared by both slots so updates never destroy /home.
+  A/B image-based system.  The image is read-only underneath, and everything
+  written since imaging lives on the overlay partition. How much of the root
+  that covers is set by the image: see /usr/lib/ab/state.conf.
 
     ab-overlay-diff        what this machine changed, and what it hides
     ab-overlay-diff -a     include added and deleted files
@@ -693,9 +899,9 @@ cat > "$MNT/etc/motd" <<'MOTD'
     ab-update --status     which slot is running, and what is on the other
 
   Recovery is in the GRUB menu at boot (hold Shift / press Esc):
-    "Recovery: Slot A|B, reset overlay"   start clean, keep a copy in
-                                          /var/lib/overlay/upper.prev
-    "Recovery: Slot A|B, no overlay"      boot the image exactly as written
+    "reset writable state"   start clean, keeping a copy in
+                             /var/lib/overlay/*.prev
+    "image as written"       boot the image with no writable state at all
 
 MOTD
 
@@ -847,8 +1053,14 @@ for sl in A B; do
 done
 log "Per-slot kernels staged: /A and /B"
 
-sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" \
+sed -e "s/__KVER__/$KVER/g" -e "s/__OS__/$OS_PRETTY/g" -e "s/__ROOTFLAG__/$ROOT_FLAG/g" \
     "$OVERLAY_DIR/boot/grub/grub.cfg" > "$BOOTMNT/grub/grub.cfg"
+# An unsubstituted placeholder reaches the kernel as a bogus command-line word
+# and the root is silently mounted with the default flags, which under a
+# read-only model is a machine that boots and then cannot write anywhere.
+if grep -q '__ROOTFLAG__\|__OS__\|__KVER__' "$BOOTMNT/grub/grub.cfg"; then
+    die "grub.cfg still contains an unsubstituted placeholder"
+fi
 chroot "$MNT" grub-editenv /boot/grub/grubenv create
 # A_OK/B_OK alongside the try counters: RAUC's grub backend reads ORDER,
 # <slot>_TRY and <slot>_OK, and without the _OK variables it reports every
