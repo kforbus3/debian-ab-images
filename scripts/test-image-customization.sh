@@ -128,7 +128,7 @@ boot() {   # boot <label> <grub default index>
 
     echo ""
     echo "=== boot: $1 (slot index $2) ==="
-    timeout 420 qemu-system-x86_64 -m 2048 -smp 2 \
+    timeout "${BOOT_TIMEOUT:-420}" qemu-system-x86_64 -m 2048 -smp 2 \
         -drive file="$DISK",format=raw,if=virtio \
         -nographic -serial mon:stdio -no-reboot > "/output/custom-$1.log" 2>&1
     sed -n '/AB-CUSTOM-PROBE-START/,/AB-CUSTOM-PROBE-END/p' "/output/custom-$1.log" \
