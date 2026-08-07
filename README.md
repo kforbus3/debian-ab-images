@@ -57,6 +57,14 @@ GPT:
   problem, the GRUB menu has **Recovery** entries to reset it or bypass it, and
   `ab-overlay-diff` on the machine shows what changed. See
   [docs/RECOVERY.md](docs/RECOVERY.md).
+- **…but that is a default, not the design.** The image ships a manifest
+  (`/usr/lib/ab/state.conf`) saying which paths are writable and which of them
+  the two slots share, and the initramfs applies it. `--slot-private
+  /var/lib/docker` keeps release-coupled state apart; `--state-model stateful`
+  makes `/usr` read-only and enumerates what a machine owns, the way ChromeOS
+  does; `--state-model appliance` keeps only `/data` across an update, the way
+  Android and the RAUC/Mender reference layouts do. See
+  [docs/BUILDER.md](docs/BUILDER.md#writable-state).
 - **GRUB + RAUC** integration: slot selection lives in `grubenv`; [RAUC](https://rauc.io/)
   is preconfigured (`compatible=<distro>-ab`) for signed bundle updates.
 - **Smallest possible image** by default: the image is sized to its contents and

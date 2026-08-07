@@ -143,6 +143,18 @@ jobs:
           # on join, and symlinked directories pointing out of the tree.
           python tests/test_overlay.py
 
+      - name: State-manifest engine
+        run: |
+          # The initramfs script, run for real against a loopback ext4 partition
+          # with /proc/cmdline faked per case. It belongs in the fast job rather
+          # than with the boot tests: it is the highest-risk code in the project
+          # -- it runs before there is anything to log into, and twice now a bug
+          # in it has looked exactly like success -- and it finishes in about a
+          # minute, which the boot tests do not.
+          docker run --rm --privileged -v "$PWD":/repo:ro ubuntu:24.04 \
+            bash /repo/scripts/test-state-directives.sh | tee state.log
+          grep -q "failed: 0" state.log || { echo "::error::state-manifest engine failed"; exit 1; }
+
       - name: Provisioning config renders for every architecture
         run: |
           # dnsmasq must hand an arm64 machine an arm64 bootloader; getting this
@@ -183,7 +195,7 @@ jobs:
         run: |
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             --entrypoint bash debian-ab-builder:amd64 /s/test-overlay-recovery.sh | tee rec.log
-          grep -q "upper layer set aside" rec.log || { echo "::error::reset did not run"; exit 1; }
+          grep -q "set aside" rec.log || { echo "::error::reset did not run"; exit 1; }
           grep -q "prev-added:   present" rec.log || { echo "::error::reset destroyed the old upper layer"; exit 1; }
 
       - name: An update bundle installs and the machine boots the other slot
@@ -216,6 +228,25 @@ jobs:
             --entrypoint bash debian-ab-builder:amd64 /s/test-image-customization.sh | tee custom.log
           grep -q "PASS:" custom.log || { echo "::error::image-owned override failed"; exit 1; }
 
+      - name: Each state model boots and lays out what its manifest says
+        run: |
+          # One build per model, because the models differ in whether the root
+          # slot is writable at all -- which nothing short of a real boot with
+          # systemd on it can confirm.
+          for model in overlay stateful appliance; do
+            ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+              --hostname "sm-$model" --username ci --password ci --image-size 8 \
+              --compress none --state-model "$model" \
+              --slot-private /var/lib/docker --volatile /var/tmp:128M \
+              --output "/output/sm-$model.img"
+            docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+              -e "SRC=/output/sm-$model.img" -e BOOT_TIMEOUT=600 \
+              --entrypoint bash debian-ab-builder:amd64 /s/test-state-model.sh \
+              | tee "sm-$model.log"
+            grep -q "failed: 0" "sm-$model.log" \
+              || { echo "::error::state model $model did not boot as its manifest describes"; exit 1; }
+          done
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -223,4 +254,6 @@ jobs:
           path: |
             boot.log
             rec.log
+            state.log
+            sm-*.log
             output/*.log

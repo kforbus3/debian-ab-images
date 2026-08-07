@@ -60,10 +60,13 @@ Reboot and pick from the GRUB menu. Both normal entries stay at the top and are
 what boots automatically; the recovery entries are only ever reached by choosing
 them.
 
-### Recovery: Slot A|B, reset overlay (keeps a copy)
+### Recovery: Slot A|B, reset writable state (keeps a copy)
 
-Boots with an **empty** upper layer. The old one is renamed to
-`/var/lib/overlay/upper.prev`.
+Boots with **empty** writable state. Each store the image uses is renamed
+alongside itself: `upper` → `upper.prev`, `persist` → `persist.prev`, `slots` →
+`slots.prev`. All of them, not just the overlay's upper layer — a machine told
+to start clean that came back up on its old `/var` and `/home` would be the
+opposite of what the entry promises.
 
 - It is a rename on the same filesystem: instant, and it copies nothing, so it
   needs no free space.
@@ -90,14 +93,18 @@ Putting the whole thing back, if the reset did not help:
 # reboot
 ```
 
-If `upper.prev` already exists, a second reset is **refused** rather than run —
+If a `*.prev` already exists, a second reset is **refused** rather than run —
 overwriting it would destroy the state you were trying to rescue. Move or remove
-it first, or use the "no overlay" entry to get in and tidy up. The refusal is
-printed to the kernel log (`dmesg | grep ab-overlay`).
+it first, or use the "image as written" entry to get in and tidy up. The refusal
+is printed to the kernel log (`dmesg | grep ab-overlay`).
 
-### Recovery: Slot A|B, no overlay (image as written)
+Machine identity — SSH host keys and `machine-id` — lives in
+`/var/lib/overlay/persistent/`, which is outside every store and is **not** set
+aside by a reset. A recovered machine keeps its identity on purpose.
 
-Boots the root slot directly and ignores the overlay entirely. This is the
+### Recovery: Slot A|B, image as written (no writable state)
+
+Boots the root slot directly and applies no state manifest at all. This is the
 diagnostic: what you get is exactly what the imager wrote, so
 
 - if the problem is **gone**, it lives in the overlay → use the reset entry;
@@ -116,20 +123,26 @@ by hand to repair a single file without discarding everything else:
 
 Note this entry gives you a writable root **on the slot itself**, so anything
 you change lands in the image copy and will be replaced by the next A/B update.
-Use it to repair the overlay, not as a place to work.
+Use it to repair the writable state, not as a place to work.
 
 ## Doing it by hand
 
 The menu entries are just kernel command-line flags. At the GRUB menu press
 <kbd>e</kbd>, add one to the `linux` line, then <kbd>Ctrl</kbd>+<kbd>X</kbd>:
 
-| flag | root slot | upper layer |
+| flag | root slot | writable state |
 | --- | --- | --- |
-| `ab.overlay=reset` | overlaid as normal | set aside as `upper.prev`, fresh one created |
-| `ab.overlay=off` | booted directly | untouched, not mounted at `/` |
-| *(none)* | overlaid as normal | used as-is |
+| `ab.state=reset` | manifest applied as normal | every store set aside as `*.prev`, fresh ones created |
+| `ab.state=off` | booted directly | untouched, not mounted at `/` |
+| *(none)* | manifest applied as normal | used as-is |
 
-Neither flag persists.
+Neither flag persists. `ab.overlay=reset` and `ab.overlay=off` are still
+accepted, so a runbook written against an older image keeps working.
+
+The "image as written" menu entries also append `rw`. Under the `stateful` and
+`appliance` models the slot is normally read-only and everything writable comes
+from the manifest — which is exactly what this entry switches off, so without it
+the recovery boot would land you on a system with nowhere to write anything.
 
 ## Checking what happened
 
@@ -146,10 +159,11 @@ rather than failing:
 
 | message | meaning |
 | --- | --- |
-| `disabled on the command line` | `ab.overlay=off` was passed |
+| `disabled on the command line` | `ab.state=off` (or `ab.overlay=off`) was passed |
 | `no overlay device` | the overlay partition was not found or not unlocked |
 | `overlay filesystem would not mount` | the partition is there but its filesystem would not mount |
-| `reset refused: ... upper.prev already exists` | a snapshot is already saved; deal with it first |
+| `reset refused: ... already exist(s)` | a snapshot is already saved; deal with it first |
+| `REFUSING: this image uses state model ...` | the image's writable-state layout differs from the one the machine was imaged with; it needs a re-image, not an update |
 
 ## What this does not touch
 

@@ -20,4 +20,9 @@ esac
 manual_add_modules overlay
 copy_exec /sbin/blkid /sbin 2>/dev/null || true
 copy_exec /bin/rm /bin 2>/dev/null || copy_exec /usr/bin/rm /bin 2>/dev/null || true
+# cp for the same reason as rm: a `persist` or `slot-private` directive seeds
+# its store from the image's copy the first time it is used, and klibc has no
+# cp at all. Without this a bind over /var hands the machine an empty /var --
+# and, like the rm case, says so only to the kernel log.
+copy_exec /bin/cp /bin 2>/dev/null || copy_exec /usr/bin/cp /bin 2>/dev/null || true
 exit 0

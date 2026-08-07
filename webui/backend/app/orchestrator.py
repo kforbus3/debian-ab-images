@@ -529,6 +529,23 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     for path in str(opts.get("own_paths", "")).split():
         if path.startswith("/"):
             args += ["--own-path", path]
+    # How the image lays out writable state, and which paths are carved out of
+    # the default "one overlay shared by both slots". build-image.sh validates
+    # all of this and refuses the build rather than shipping a manifest that
+    # would only be discovered as wrong at a boot prompt, so nothing here needs
+    # to second-guess it beyond dropping obvious junk.
+    if opts.get("state_model") and opts["state_model"] != "overlay":
+        args += ["--state-model", opts["state_model"]]
+    for field, flag in (
+        ("persist_paths", "--persist"),
+        ("slot_private_paths", "--slot-private"),
+        ("volatile_paths", "--volatile"),
+        ("reset_paths", "--reset-on-update"),
+        ("keep_paths", "--keep-path"),
+    ):
+        for path in str(opts.get(field, "")).split():
+            if path.startswith("/"):
+                args += [flag, path]
     if opts.get("run_script"):
         # Written into the output directory, which is already mounted, rather
         # than adding another mount for a single file.

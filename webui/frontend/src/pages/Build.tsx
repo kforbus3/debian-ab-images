@@ -34,6 +34,8 @@ export default function Build() {
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
     store_passphrase: false,
     run_script: "", own_paths: "",
+    state_model: "overlay", persist_paths: "", slot_private_paths: "",
+    volatile_paths: "", reset_paths: "", keep_paths: "",
   });
   const [store, setStore] = useState<{ configured: boolean; provider: string } | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -251,6 +253,88 @@ export default function Build() {
                   <p className="mt-1 text-xs text-zinc-500">
                     Space-separated, for paths you are not shipping a file for but still
                     want the image to win.
+                  </p>
+                </div>
+
+                {/* Writable state. The model is the important control and the
+                    per-path fields are the exceptions to it, so the model comes
+                    first and each option says what it costs -- picking one of
+                    these wrong is not visible until an update lands on a
+                    machine months later. */}
+                <div className="rounded-lg border border-zinc-800 p-3">
+                  <Label>Writable state</Label>
+                  <select
+                    value={opts.state_model}
+                    onChange={(e) => set("state_model", e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-brand-500">
+                    <option value="overlay">Overlay root — everything survives updates (default)</option>
+                    <option value="stateful">Stateful — /usr read-only, /home and /var persist</option>
+                    <option value="appliance">Appliance — only /data survives an update</option>
+                  </select>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {opts.state_model === "overlay" && (
+                      <>The whole root is one overlay shared by both slots. Anything done to a
+                      machine, including <code className="text-zinc-300">apt install</code>, survives
+                      an update.</>
+                    )}
+                    {opts.state_model === "stateful" && (
+                      <>The slot is mounted read-only, so nothing a machine writes can shadow a
+                      binary an update delivers. <code className="text-zinc-300">/home</code>,{" "}
+                      <code className="text-zinc-300">/var</code> and{" "}
+                      <code className="text-zinc-300">/usr/local</code> are real directories on the
+                      overlay partition and survive. This is the shape ChromeOS uses.</>
+                    )}
+                    {opts.state_model === "appliance" && (
+                      <>The slot is read-only and <code className="text-zinc-300">/var</code> reverts
+                      to the image on every slot change. Only{" "}
+                      <code className="text-zinc-300">/data</code> survives an update —{" "}
+                      <code className="text-zinc-300">apt install</code> does not. This is the shape
+                      Android and the RAUC/Mender reference layouts use.</>
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs text-amber-500/80">
+                    Changing the model needs a re-image, not an update: a machine imaged with a
+                    different one refuses the change at boot rather than hiding the state it
+                    already has.
+                  </p>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label>Shared across slots (persist)</Label>
+                      <Input value={opts.persist_paths}
+                             onChange={(e) => set("persist_paths", e.target.value)}
+                             placeholder="/srv /var/lib/myapp" />
+                    </div>
+                    <div>
+                      <Label>Private to each slot</Label>
+                      <Input value={opts.slot_private_paths}
+                             onChange={(e) => set("slot_private_paths", e.target.value)}
+                             placeholder="/var/lib/docker" />
+                    </div>
+                    <div>
+                      <Label>Discarded on reboot (tmpfs)</Label>
+                      <Input value={opts.volatile_paths}
+                             onChange={(e) => set("volatile_paths", e.target.value)}
+                             placeholder="/var/tmp:256M" />
+                    </div>
+                    <div>
+                      <Label>Reset when the slot changes</Label>
+                      <Input value={opts.reset_paths}
+                             onChange={(e) => set("reset_paths", e.target.value)}
+                             placeholder="/var/lib/postgresql" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Label>Held back from that reset</Label>
+                      <Input value={opts.keep_paths}
+                             onChange={(e) => set("keep_paths", e.target.value)}
+                             placeholder="/opt/vendor/license" />
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Space-separated absolute paths. Use <em>private to each slot</em> for state
+                    whose on-disk format is tied to the release — a shared{" "}
+                    <code className="text-zinc-300">/var/lib/docker</code> hands the new version
+                    the old one's data directory.
                   </p>
                 </div>
 

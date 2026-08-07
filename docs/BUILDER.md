@@ -142,6 +142,72 @@ What does **not** belong here: per-machine identity — hostname, `machine-id`,
 SSH host keys — which is generated on first boot and kept in the overlay on
 purpose. This is for fleet-wide configuration that should be part of the image.
 
+## Writable state
+
+What a machine is allowed to change, and what the two slots share. The default
+suits general-purpose Debian; the other two exist because "shared by default" is
+the wrong answer for some fleets, and until now there was no way to say so.
+
+```bash
+./builder/run.sh --state-model stateful
+```
+
+| `--state-model` | root slot | what survives an update | comparable to |
+| --- | --- | --- | --- |
+| `overlay` *(default)* | rw, whole root overlaid | everything, including `apt install` | this project's original behaviour |
+| `stateful` | **ro** | `/home`, `/var`, `/usr/local`, `/root`, `/srv`, `/opt`; `/etc` overlaid | ChromeOS's stateful partition |
+| `appliance` | **ro** | `/data` only; `/var` reverts to the image every slot change | Android `/data`, RAUC/Mender reference layouts |
+
+Under `stateful` and `appliance` the slot is mounted read-only, so nothing a
+machine writes can shadow a binary an update just delivered — which is the entire
+class of bug that `reset-on-update` exists to clean up after under the default
+model. The trade is that `apt install` does not survive an update. That is
+correct for an appliance and wrong for a general-purpose server, which is why
+the default is what it is.
+
+### Carving out individual paths
+
+All five are repeatable, take absolute paths, and work with any model:
+
+| flag | effect |
+| --- | --- |
+| `--persist /srv` | shared by both slots, outside the overlay, never shadowed by an update |
+| `--slot-private /var/lib/docker` | each slot gets its own; nothing crosses between them |
+| `--volatile /var/tmp:256M` | tmpfs; kept neither between slots nor across a reboot |
+| `--reset-on-update /var/lib/postgresql` | cleared on a slot change so the new release starts from its own copy |
+| `--keep-path /opt/vendor/license` | held back from that clearing |
+
+`--slot-private` is the one worth reaching for first. State whose on-disk format
+is tied to a release — a container store, a database directory — is *actively
+dangerous* to share: a slot change hands the new binary the old release's data
+directory, and nothing warns you. ChromeOS forces a full wipe on version
+rollback for exactly this reason.
+
+```bash
+./builder/run.sh \
+  --slot-private /var/lib/docker \
+  --persist /srv \
+  --volatile /var/tmp:256M
+```
+
+The build validates the result and refuses rather than shipping a manifest that
+would only be found wrong at a boot prompt: absolute paths, no duplicates across
+directives (including against the model's own), no nested overlays.
+
+### Changing the model later
+
+You cannot, by update. A machine records its model, and an image declaring a
+different one is refused at boot — the slot boots untouched and the refusal goes
+to the kernel log. Everything the machine wrote is still on the partition, but it
+is laid out for the old model, and applying the new one would hide it in a way
+that is indistinguishable from data loss. Re-image instead.
+
+### Seeing it on a running machine
+
+`cat /usr/lib/ab/state.conf` is the manifest. `ab-overlay-diff` lists what the
+machine has written and what it is shadowing, and now also lists the paths that
+sit outside the overlay entirely, with whether the other slot sees them.
+
 ### Running commands in the image
 
 `--run-script FILE` runs a shell script inside the chroot after packages and

@@ -25,6 +25,9 @@ SRC="${SRC:-/output/ovl-test.img}"      # image to test
 DISK="${DISK:-/output/boot-target.img}"  # scratch target, recreated each run
 PASS="${PASS:-testluks}"                 # --luks-passphrase used at build time
 SIZE="${SIZE:-32G}"                      # target disk, deliberately > the image
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-360}"      # seconds; raise it when QEMU has no KVM
+                                         # (an x86 guest on an arm64 host is pure TCG
+                                         #  and takes several times longer to boot)
 
 fail() { echo "HARNESS-FAIL: $*"; exit 1; }
 
@@ -149,8 +152,8 @@ trap - EXIT
 
 # --- boot ---------------------------------------------------------------------
 echo ""
-echo "=== booting (up to 6 minutes) ==="
-timeout 360 qemu-system-x86_64 -m 2048 -smp 2 \
+echo "=== booting (up to ${BOOT_TIMEOUT}s) ==="
+timeout "$BOOT_TIMEOUT" qemu-system-x86_64 -m 2048 -smp 2 \
     -drive file="$DISK",format=raw,if=virtio \
     -nographic -serial mon:stdio -no-reboot > /output/bootcheck.log 2>&1
 
