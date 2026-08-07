@@ -154,6 +154,15 @@ kept.
 The FHS reserves it for locally installed software precisely because packages
 never touch it, and it is where a person puts a script expecting it to stay.
 
+All of the above describes the **default `overlay` state model**, where apt
+succeeds and its work is undone later. Under `--state-model stateful` or
+`appliance` the root slot is mounted read-only, so apt does not get that far: it
+fails outright on `/usr`, at the moment you run it rather than at the next
+update. Which paths a machine can write, and which of them the two slots share,
+is a property of the image — see
+[BUILDER.md](BUILDER.md#writable-state), or `cat /usr/lib/ab/state.conf` on the
+machine itself.
+
 **In practice this means your patch cadence is your image-rebuild cadence.** The
 `apt-get upgrade` happens inside the build, so rebuilding picks up whatever is
 current in the archive, and the bundle ships it to the fleet.
