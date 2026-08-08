@@ -2,7 +2,7 @@
 
 Notable changes per release. Dates are the tag date.
 
-## v1.2.0 — 2026-08-08
+## v0.5.0 — 2026-08-08
 
 **Over-the-air updates work on encrypted machines, and reach machines that have
 left the provisioning network.** Every fix here came out of one bundle that
@@ -98,6 +98,6 @@ watching encrypted updates was a nightly that did not test them. Now:
   `df` inside the builder reports space that does not exist and overrunning
   corrupts Docker rather than failing with ENOSPC.
 
-## v1.1.0 and earlier
+## v0.4.0 and earlier
 
-See the git history; this file starts at v1.2.0.
+See the git history; this file starts at v0.5.0.

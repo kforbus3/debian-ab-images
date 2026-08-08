@@ -257,7 +257,7 @@ a bundle has been rolled out or merely built.
 | `server not responding` | nothing is listening at that address — the bundle server is bound to `SERVER_IP`, see [reaching the bundle server](#reaching-the-bundle-server-from-the-lan) |
 | `Signature size (…) exceeds bundle size` | the URL was answered by something that is not a bundle, usually the web UI's port |
 | `is not a RAUC bundle` | `ab-update` checked the first four bytes and they were not squashfs — wrong URL, not a bad bundle |
-| `Waiting for encrypted source device` after an update | the bundle came from an image built before v1.2.0, whose crypttab carries that build's LUKS UUIDs — see below |
+| `Waiting for encrypted source device` after an update | the bundle came from an image built before v0.5.0, whose crypttab carries that build's LUKS UUIDs — see below |
 
 ### Encrypted machines and update bundles
 
@@ -275,9 +275,9 @@ cryptsetup: Waiting for encrypted source device UUID=d424879d-...
 ```
 
 The tell is that *none* of them resolve: one missing volume is a damaged disk,
-three is an image carrying somebody else's identity. Fixed in v1.2.0.
+three is an image carrying somebody else's identity. Fixed in v0.5.0.
 
-A machine imaged before v1.2.0 needs its crypttab corrected once, from the other
+A machine imaged before v0.5.0 needs its crypttab corrected once, from the other
 slot, before an update will boot — its own initramfs still has the old UUIDs:
 
 ```bash

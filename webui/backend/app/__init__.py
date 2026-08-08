@@ -1,3 +1,3 @@
 """Debian A/B Images web management UI."""
 
-__version__ = "1.2.0"
+__version__ = "0.5.0"
