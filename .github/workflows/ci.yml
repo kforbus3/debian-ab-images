@@ -248,6 +248,13 @@ jobs:
           # identity. Volumes are addressed by PARTLABEL now; this is what says
           # so. Bundling from a LUKS image needs the passphrase to read the slot;
           # the bundle it writes is plain and installs on either kind of machine.
+          #
+          # Reclaim the scratch disks the earlier boots wrote first. Each harness
+          # makes its own 32 GiB target and this step adds a fifth image on top
+          # of them; the runner has run out of space here before, and it does not
+          # fail as "out of space" but as whatever was mid-write at the time.
+          rm -f output/*-target.img
+          df -h / | tail -1
           ./builder/run.sh --arch amd64 --distro debian --suite trixie \
             --hostname encsrc --username ci --password ci --image-size 8 \
             --compress none --encrypt --unlock keyfile --luks-passphrase testluks \
@@ -264,6 +271,7 @@ jobs:
             -e TAG=enc -e SRC=/output/enc-target.img \
             -e BUNDLE=/output/bundles/enc-ci.raucb \
             -e DISK=/output/enc-update-target.img \
+            -e LUKS_PASSPHRASE=testluks \
             --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh | tee enc-upd.log
           grep -q "PASS:" enc-upd.log || { echo "::error::encrypted update did not complete"; exit 1; }
 
