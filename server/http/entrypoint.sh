@@ -35,6 +35,34 @@ envsubst '${RETRY_SECONDS}'                            < /unassigned.ipxe.tmpl >
 # Bind the listener to the provisioning IP rather than every host interface.
 envsubst '${SERVER_IP}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
 
+# --- update bundles, reachable from where the fleet actually lives -----------
+#
+# Optional second listener, off unless UPDATE_IP is set. A machine is on the
+# provisioning segment only while it is being imaged; it spends the rest of its
+# life on the LAN, which is when it needs updates. Without this, `ab-update`
+# from a deployed machine cannot reach anything.
+#
+# Serves /bundles/ alone -- see nginx-updates.conf.tmpl for why that is safe and
+# a wider bind is not. Use the host's LAN address, or 0.0.0.0 to accept on every
+# interface as an explicit choice rather than a side effect.
+rm -f /etc/nginx/conf.d/updates.conf
+if [ -n "${UPDATE_IP:-}" ]; then
+    UPDATE_PORT="${UPDATE_PORT:-80}"
+    # Two default_servers on one address:port is a startup failure, and nginx
+    # failing to start takes PXE down with it -- so a UPDATE_IP that collides
+    # with the imaging listener is a no-op with a note, not an outage. The
+    # imaging listener already serves /bundles/ on that socket anyway.
+    if [ "$UPDATE_IP" = "$SERVER_IP" ] && [ "$UPDATE_PORT" = "80" ]; then
+        echo "UPDATE_IP is SERVER_IP on port 80; the imaging listener already serves"
+        echo "/bundles/ there. Not adding a second listener."
+    else
+        export UPDATE_IP UPDATE_PORT
+        envsubst '${UPDATE_IP} ${UPDATE_PORT}' < /nginx-updates.conf.tmpl \
+            > /etc/nginx/conf.d/updates.conf
+        echo "Update bundles also served on ${UPDATE_IP}:${UPDATE_PORT}/bundles/"
+    fi
+fi
+
 echo "----- rendered /srv/http/boot.ipxe -----"
 cat /srv/http/boot.ipxe
 echo "----------------------------------------"

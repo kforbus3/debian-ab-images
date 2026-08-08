@@ -994,15 +994,50 @@ if [ -n "$RUN_SCRIPT" ]; then
     rm -f "$MNT/tmp/ab-custom.sh"
 fi
 
+# --- the certificate that decides whether this machine can ever be updated ----
+#
+# This has to be right at build time or not at all: the keyring is inside the
+# image, and a machine that shipped without the cert cannot be given it by an
+# update, because the update is the thing it will not accept. The first image
+# built here shipped before any key existed, so its keyring was the fallback
+# below, and the bundle it was sent months later failed with
+#
+#   signature verification failed: Verify error: self-signed certificate
+#
+# which reads like a bad bundle rather than an image that never trusted anything.
+#
+# So generate the key here when it is missing rather than warning about it.
+# make-bundle.sh already does exactly this on the first bundle; doing it in
+# whichever runs first means an image and the bundles for it always agree, and
+# the ordering trap -- build image, build bundle, discover the image predates
+# the key -- stops existing. Same parameters as make-bundle.sh on purpose.
 RAUC_CERT="${RAUC_CERT:-/output/rauc-keys/cert.pem}"
+RAUC_KEYDIR="$(dirname "$RAUC_CERT")"
+if [ ! -f "$RAUC_CERT" ] && [ "$RAUC_CERT" = "/output/rauc-keys/cert.pem" ]; then
+    log "No update signing key yet; generating one in $RAUC_KEYDIR"
+    log "  Keep it: every image built from here trusts this certificate, and"
+    log "  replacing it orphans every machine already deployed."
+    mkdir -p "$RAUC_KEYDIR"
+    openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 3650 \
+        -keyout "$RAUC_KEYDIR/key.pem" -out "$RAUC_CERT" \
+        -subj "/O=debian-ab-images/CN=A-B Update Signing" >/dev/null 2>&1 \
+        || log "WARNING: could not generate a signing key"
+    chmod 600 "$RAUC_KEYDIR/key.pem" 2>/dev/null || true
+fi
+
 if [ -f "$RAUC_CERT" ]; then
     log "Trusting the update signing certificate ($RAUC_CERT)"
     cp "$RAUC_CERT" "$MNT/etc/rauc/keyring.pem"
 elif [ ! -f "$MNT/etc/rauc/keyring.pem" ]; then
-    log "WARNING: no signing certificate at $RAUC_CERT — this image will not accept"
-    log "         update bundles. Build a bundle once to generate the key, then rebuild."
-    cp "$MNT/etc/ssl/certs/ca-certificates.crt" "$MNT/etc/rauc/keyring.pem" 2>/dev/null \
-        || touch "$MNT/etc/rauc/keyring.pem"
+    # An empty keyring, not the public CA bundle. The old fallback copied
+    # ca-certificates.crt in, which does not merely fail to help -- it means the
+    # machine accepts a bundle signed by anything chaining to any of ~150 public
+    # CAs. "Trusts nobody" is the only honest answer when there is no key, and
+    # it fails at the first install attempt instead of at the wrong one.
+    log "WARNING: no signing certificate at $RAUC_CERT and none could be generated."
+    log "         This image ships an empty keyring and will refuse every update"
+    log "         bundle until it is rebuilt against a certificate."
+    : > "$MNT/etc/rauc/keyring.pem"
 fi
 
 # Configure first-boot TPM/Tang enrollment.

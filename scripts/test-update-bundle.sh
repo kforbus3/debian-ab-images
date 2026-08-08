@@ -18,7 +18,7 @@
 set -u
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq qemu-system-x86 gdisk util-linux busybox >/dev/null 2>&1
+apt-get install -y -qq qemu-system-x86 gdisk util-linux nginx-light curl >/dev/null 2>&1
 
 SRC="${SRC:-/output/upd-test.img}"
 DISK="${DISK:-/output/update-target.img}"
@@ -145,10 +145,44 @@ mount "/dev/${BB}p3" /mnt/boot 2>/dev/null && {
 losetup -d "$LO"
 
 # --- serve the bundle to the guest -------------------------------------------
-busybox httpd -p "$PORT" -h /output &
+#
+# nginx, not busybox httpd, because this is the only thing that decides whether
+# `rauc install <url>` works and busybox is not the server production uses.
+#
+# RAUC streams a bundle as an NBD device backed by HTTP range requests, and its
+# backend requires 206 on every read with exactly the requested byte count --
+# anything else is NBD_EIO, the device is torn down, and dm-verity is then set
+# up against a device with no size ("Hash device is too small (-E2BIG)"), which
+# is what this test reported for a week. busybox httpd answers a range that is
+# wholly past EOF with 200 and the entire file, where nginx answers 416; the
+# 200 fails RAUC's response-code check and the oversized body overruns its read
+# buffer. Testing streaming against a server that behaves nothing like the one
+# in server/http told us nothing about whether streaming works.
+cat > /etc/nginx/nginx.conf <<EOF
+daemon off;
+# Workers as root: /output is a mounted volume whose ownership is the host's,
+# and a 403 here would read as a streaming failure.
+user root;
+error_log /dev/stderr warn;
+events { worker_connections 64; }
+http {
+    access_log off;
+    include /etc/nginx/mime.types;
+    server {
+        listen ${PORT};
+        root /output;
+        autoindex on;
+        sendfile on;
+    }
+}
+EOF
+nginx &
 HTTPD=$!
 trap 'kill $HTTPD 2>/dev/null' EXIT
 sleep 1
+# Fail here rather than 900 seconds into a boot that could never have worked.
+curl -fsS -o /dev/null -r 0-3 "http://127.0.0.1:${PORT}/bundles/$(basename "$BUNDLE")" \
+    || fail "the bundle is not being served over HTTP"
 
 boot() {
     echo ""
