@@ -50,7 +50,20 @@ log() { echo "luks-enroll: $*"; }
 mapfile -t ENTRIES < <(grep -vE '^\s*(#|$)' /etc/crypttab | awk '{print $1" "$2}')
 [ "${#ENTRIES[@]}" -gt 0 ] || { log "no crypttab entries"; exit 0; }
 
-resolve() { blkid -U "${1#UUID=}" 2>/dev/null; }
+# Any spelling crypttab allows, not just UUID=. Images now address the volumes
+# by PARTLABEL so a bundle built from one image is installable on a machine
+# imaged from another, and `blkid -U PARTLABEL=rootfs-a` finds nothing -- which
+# would have shown up as enrollment silently skipping every volume, on a machine
+# that then has no way to unlock itself unattended. UUID= stays handled: images
+# built before the change are still out there and still run this script.
+# Same resolution Debian's own _resolve_device_spec uses.
+resolve() {
+    case "$1" in
+        UUID=*|LABEL=*|PARTUUID=*|PARTLABEL=*)
+            blkid -l -t "$1" -o device 2>/dev/null;;
+        *)  [ -b "$1" ] && printf '%s\n' "$1";;
+    esac
+}
 
 case "$METHOD" in
     tpm2) PIN=tpm2; PIN_CFG="{\"pcr_bank\":\"sha256\",\"pcr_ids\":\"$TPM2_PCRS\"}";;

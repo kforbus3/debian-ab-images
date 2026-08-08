@@ -25,6 +25,9 @@ DISK="${DISK:-/output/update-target.img}"
 BUNDLE="${BUNDLE:-}"
 SIZE="${SIZE:-32G}"
 PORT=8000
+# Namespaces the boot logs so an encrypted run and a plain one can both be
+# looked at afterwards instead of the second overwriting the first.
+TAG="${TAG:+$TAG-}"
 
 fail() { echo "HARNESS-FAIL: $*"; exit 1; }
 [ -f "$SRC" ] || fail "no $SRC"
@@ -190,8 +193,8 @@ boot() {
     timeout 900 qemu-system-x86_64 -m 2048 -smp 2 \
         -drive file="$DISK",format=raw,if=virtio \
         -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
-        -nographic -serial mon:stdio -no-reboot > "/output/update-$1.log" 2>&1
-    sed -n '/AB-UPDATE-PROBE-START/,/AB-UPDATE-PROBE-END/p' "/output/update-$1.log" \
+        -nographic -serial mon:stdio -no-reboot > "/output/update-${TAG}$1.log" 2>&1
+    sed -n '/AB-UPDATE-PROBE-START/,/AB-UPDATE-PROBE-END/p' "/output/update-${TAG}$1.log" \
         | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | sed 's/^/  /'
 }
 
@@ -204,9 +207,20 @@ boot after-reboot
 # slot B boots at all and identifies itself as the bundle's image.
 echo ""
 echo "=== result ==="
-AFTER=/output/update-after-reboot.log
+AFTER="/output/update-${TAG}after-reboot.log"
 ok=1
 grep -qa "Slot B (rootfs.1)" "$AFTER" || { echo "  FAIL: GRUB did not select slot B"; ok=0; }
+# The encrypted regression, named explicitly because its symptom is silence.
+# crypttab used to carry the LUKS UUIDs of the build that produced the image, so
+# a bundle from a *different* build gave the machine three volumes that exist
+# nowhere on its disk: slot B waited on all of them forever and the monitor
+# showed a cursor. Addressing them by PARTLABEL is what fixes it, and this is
+# what proves the fix rather than assuming it.
+grep -qa "Waiting for encrypted source device" "$AFTER" && {
+    echo "  FAIL: slot B is waiting for encrypted devices that are not on this disk"
+    echo "        (crypttab carrying build-time identity — see build-image.sh)"
+    grep -a "Waiting for encrypted source device" "$AFTER" | tail -3 | sed 's/^/        /'
+    ok=0; }
 # Specifically the root device, not any "does not exist" line: the boot log
 # routinely contains others (systemd noting /sbin/tomoyo-init is absent), and
 # matching those reported a failure on a machine that had booted perfectly.
