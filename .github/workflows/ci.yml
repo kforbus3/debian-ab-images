@@ -155,6 +155,15 @@ jobs:
             bash /repo/scripts/test-state-directives.sh | tee state.log
           grep -q "failed: 0" state.log || { echo "::error::state-manifest engine failed"; exit 1; }
 
+      - name: ab-update falls back and diagnoses correctly
+        run: |
+          # The real update test builds two 8 GiB images and boots them, so it
+          # only runs nightly -- and the streaming fallback stayed broken for a
+          # week because that was the only thing watching it. This stubs rauc
+          # and curl and checks the same logic in about a second.
+          bash scripts/test-ab-update.sh | tee abu.log
+          grep -q "ALL PASS" abu.log || { echo "::error::ab-update fallback/diagnostics regressed"; exit 1; }
+
       - name: Provisioning config renders for every architecture
         run: |
           # dnsmasq must hand an arm64 machine an arm64 bootloader; getting this

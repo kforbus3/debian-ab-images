@@ -81,7 +81,15 @@ else
     echo "--- rauc status before ---"
     rauc status 2>&1 | head -12
     echo "--- installing ---"
-    ab-update "http://10.0.2.2:${PORT}/bundles/$(basename "$BUNDLE")" 2>&1 | tail -20
+    # Keep the whole log, not the tail: which route the install took (streamed,
+    # or downloaded after streaming failed) is the thing worth knowing when this
+    # breaks, and the tail cuts exactly that off.
+    ab-update "http://10.0.2.2:${PORT}/bundles/$(basename "$BUNDLE")" 2>&1 | tee /tmp/upd.log | tail -40
+    if grep -q "Streaming the update failed" /tmp/upd.log; then
+        echo "install-route:  downloaded (streaming failed and the fallback took over)"
+    else
+        echo "install-route:  streamed"
+    fi
     echo "--- rauc status after ---"
     rauc status 2>&1 | head -20
 fi
