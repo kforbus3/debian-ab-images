@@ -2,6 +2,22 @@
 
 Notable changes per release. Dates are the tag date.
 
+## v0.5.1 — 2026-08-08
+
+**Two images of the same kind can coexist.** The output name was
+`{distro}-{suite}-{arch}-ab` and nothing else, so a second Debian 13 amd64 build
+silently replaced the first — and with it the image a deployed machine was made
+from (which is what a bundle for that machine has to be built from), its
+sidecars, and **the LUKS passphrase**, which the secrets manager files under the
+image name. An unrelated later build destroyed the recovery key of a machine
+already in the field, discoverable at the earliest by whoever needed it at a
+console.
+
+Builds are named now. Left blank, a free name is chosen (`…-ab`, then `-2`,
+`-3`), so the default cannot overwrite anything. Give a name and it is honoured,
+and refused if taken — with a free alternative named in the refusal, which the
+UI offers and fills in. Tick **Replace if it exists** to mean it.
+
 ## v0.5.0 — 2026-08-08
 
 **Over-the-air updates work on encrypted machines, and reach machines that have
