@@ -164,6 +164,19 @@ jobs:
             bash /repo/scripts/test-state-directives.sh | tee state.log
           grep -q "failed: 0" state.log || { echo "::error::state-manifest engine failed"; exit 1; }
 
+      - name: LUKS bootstrap key comes from the machine, not the image
+        run: |
+          # Both bugs that made encrypted updates impossible lived in this one
+          # mechanism, both were found by imaging a real machine rather than by
+          # CI, and both were invisible until a second boot: crypttab naming the
+          # build's own LUKS UUIDs, and the keyfile being baked into the
+          # initramfs. Real loop device, real GPT, real LUKS, the real
+          # init-premount script -- about a minute, against 50 for the boot
+          # tests, which were not watching this at all.
+          docker run --rm --privileged -v "$PWD":/repo:ro ubuntu:24.04 \
+            bash /repo/scripts/test-luks-key-portability.sh | tee luks.log
+          grep -q "failed: 0" luks.log || { echo "::error::LUKS key portability regressed"; exit 1; }
+
       - name: ab-update falls back and diagnoses correctly
         run: |
           # The real update test builds two 8 GiB images and boots them, so it
@@ -267,6 +280,13 @@ jobs:
             --hostname enctarget --username ci --password ci --image-size 8 \
             --compress none --encrypt --unlock keyfile --luks-passphrase testluks \
             --output /output/enc-target.img
+          # Before spending 15 minutes on a boot: assert the image carries
+          # nothing that belongs to the disk it was built on. Both bugs that
+          # made encrypted updates impossible are visible here in seconds, and
+          # both were found by imaging a machine instead of by CI.
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            -e IMAGE=/output/enc-target.img -e LUKS_PASSPHRASE=testluks \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-image-portability.sh
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             -e TAG=enc -e SRC=/output/enc-target.img \
             -e BUNDLE=/output/bundles/enc-ci.raucb \

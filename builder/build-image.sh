@@ -631,16 +631,34 @@ if [ "$ENCRYPT" = true ]; then
     [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs curl"
 
     if [ "$USE_KEYFILE" = true ]; then
-        # Bootstrap unlock via a keyfile embedded in the initramfs. For tpm2/tang
-        # this only bootstraps the first boot; the enrollment service then binds
-        # the TPM/Tang and removes the keyfile.
-        install -d -m700 "$MNT/etc/cryptsetup-keys.d"
-        for n in rootfs-a rootfs-b overlay; do
-            install -m400 "$KEYDIR/keyfile" "$MNT/etc/cryptsetup-keys.d/luks-$n.key"
-        done
-        KEYREF_A="/etc/cryptsetup-keys.d/luks-rootfs-a.key"
-        KEYREF_B="/etc/cryptsetup-keys.d/luks-rootfs-b.key"
-        KEYREF_OVL="/etc/cryptsetup-keys.d/luks-overlay.key"
+        # Bootstrap unlock. For tpm2/tang this only bootstraps the first boot;
+        # the enrollment service then binds the TPM/Tang and reaps this key.
+        #
+        # The key lives on the BOOT partition, not in the root slot. It used to
+        # be installed into /etc/cryptsetup-keys.d/ and pulled into the initramfs
+        # by KEYFILE_PATTERN -- which made it part of the image, and therefore
+        # part of every bundle built from that image. `head -c 4096 /dev/urandom`
+        # runs per build, so a bundle delivered the *builder's* key and its
+        # initramfs then tried it against this machine's volumes:
+        #
+        #   No key available with this passphrase.
+        #   cryptsetup: ERROR: luks-rootfs-a: maximum number of tries exceeded
+        #   ALERT!  LABEL=rootfs-b does not exist.  Dropping to a shell!
+        #
+        # Same disease as the crypttab UUIDs above, in the key material rather
+        # than the addressing: an update must not carry anything that belongs to
+        # one disk. BOOT is shared by both slots and is not part of a bundle, so
+        # a key there survives an update; scripts/init-premount/ab-luks-key
+        # copies it into the initramfs at boot, before cryptroot runs.
+        #
+        # No new exposure: the keyfile was already sitting on this same plaintext
+        # partition, inside the initramfs. It is now there once instead of once
+        # per initramfs, and it stops being copied into every image built.
+        install -d -m700 "$BOOTMNT/ab-keys"
+        install -m400 "$KEYDIR/keyfile" "$BOOTMNT/ab-keys/luks.key"
+        KEYREF_A=/cryptkey/luks.key
+        KEYREF_B=/cryptkey/luks.key
+        KEYREF_OVL=/cryptkey/luks.key
     else
         KEYREF_A=none; KEYREF_B=none; KEYREF_OVL=none
     fi
@@ -777,6 +795,8 @@ cp -a "$OVERLAY_DIR"/etc/. "$MNT/etc/"
 # initramfs-tools silently ignores a script that is not executable, which would
 # leave the root overlay off with nothing in the log to say why.
 chmod 0755 "$MNT/etc/initramfs-tools/scripts/local-bottom/ab-overlay" \
+           "$MNT/etc/initramfs-tools/scripts/init-premount/ab-luks-key" \
+           "$MNT/etc/initramfs-tools/hooks/ab-luks-key" \
            "$MNT/etc/initramfs-tools/hooks/ab-overlay" 2>/dev/null || true
 cp -a "$OVERLAY_DIR"/usr/. "$MNT/usr/"
 # RAUC bundles are only accepted by systems with a matching compatible string.
@@ -1094,7 +1114,14 @@ if [ "$ENCRYPT" = true ]; then
     # A/B slot GRUB selects (not just the slot that was root at build time).
     echo 'CRYPTSETUP=y' >> "$MNT/etc/cryptsetup-initramfs/conf-hook"
     if [ "$USE_KEYFILE" = true ]; then
-        echo 'KEYFILE_PATTERN="/etc/cryptsetup-keys.d/*.key"' >> "$MNT/etc/cryptsetup-initramfs/conf-hook"
+        # No KEYFILE_PATTERN. There is deliberately no key in the image to bake
+        # in: init-premount/ab-luks-key fetches this machine's key from the BOOT
+        # partition at boot, so the initramfs a bundle delivers carries no key
+        # material at all and works on whichever machine installs it.
+        #
+        # UMASK stays: the initramfs is world-readable by default, and while the
+        # key is no longer in it, the crypttab and the rest of the boot path are
+        # not things to publish either.
         echo 'UMASK=0077' >> "$MNT/etc/initramfs-tools/initramfs.conf"
     fi
 fi
