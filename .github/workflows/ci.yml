@@ -135,6 +135,15 @@ jobs:
           # Nothing about that is visible until someone needs the recovery key.
           python tests/test_secretstore.py
 
+      - name: SPA routing
+        working-directory: webui/backend
+        run: |
+          # The catch-all used to answer 200 + index.html for any unknown path,
+          # including /bundles/*.raucb. A machine pointed at this port streamed
+          # the React app into rauc, which read "</html>\n" as the bundle's
+          # signature size and reported a corrupt bundle. A 404 is free.
+          python tests/test_spa_routing.py
+
       - name: Overlay file management
         working-directory: webui/backend
         run: |

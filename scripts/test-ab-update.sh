@@ -28,10 +28,20 @@ esac
 EOF
 chmod +x $T/bin/rauc
 }
-mk_curl() {  # $1 = content-length to report, $2 = download exit code
+mk_curl() {  # $1 = content-length, $2 = download exit code, $3 = bytes for -r 0-3
 cat > $T/bin/curl <<EOF
 #!/bin/bash
 for a in "\$@"; do case "\$a" in -*I*) echo "Content-Length: $1"; exit 0;; esac; done
+# The magic-byte probe. Empty (the default) stands for a server that would not
+# answer a range request: ab-update cannot tell, so it must not refuse.
+for a in "\$@"; do case "\$a" in -r) printf '%s' '${3-}'; exit 0;; esac; done
+# A download writes the file named by -o, so the same probe can read it back.
+o=""; p=""
+for a in "\$@"; do
+    [ "\$p" = "-o" ] && o="\$a"
+    p="\$a"
+done
+[ -n "\$o" ] && printf '%s' '${3-}' > "\$o"
 exit $2
 EOF
 chmod +x $T/bin/curl
@@ -88,6 +98,35 @@ chmod +x $T/bin/rauc
 out=$(bash builder/overlay/usr/local/sbin/ab-update.sh "$URL" 2>&1); rc=$?
 check "exit 0" "$rc" "0"
 hasnt "no fallback" "$out" "Streaming the update failed"
+
+echo "== 7. the URL answers with HTML: refuse before rauc sees it =="
+# The web UI's SPA returns its front page for any unknown path, so a bundle URL
+# on the wrong port downloads a React app under a .raucb name. RAUC read the
+# last eight bytes of that page as the signature size and reported a corrupt
+# bundle, which sent the first person to read it looking at signing keys.
+mk_rauc; mk_df 100000000
+mk_curl 4096 0 '<!DOCTYPE html>'
+export STREAM_ERR="should not get this far"
+out=$(bash builder/overlay/usr/local/sbin/ab-update.sh "http://server:8080/bundles/x.raucb" 2>&1); rc=$?
+check "exit 4"            "$rc" "4"
+has   "says not a bundle" "$out" "is not a RAUC bundle"
+has   "names the port"    "$out" "Port 8080 is the web UI"
+hasnt "rauc not invoked"  "$out" "installing"
+
+echo "== 8. a real bundle passes the check =="
+mk_curl 367001600 0 'hsqs'
+export STREAM_ERR="LastError: Failed to load dm table"
+out=$(bash builder/overlay/usr/local/sbin/ab-update.sh "$URL" 2>&1); rc=$?
+check "exit 0"            "$rc" "0"
+has   "fallback still ok" "$out" "Streaming the update failed"
+
+echo "== 9. a server that will not answer the probe does not block the update =="
+# Cannot-tell must not be treated as no. A server without range support, or a
+# machine without curl, would otherwise refuse an update that works.
+mk_curl 367001600 0 ''
+out=$(bash builder/overlay/usr/local/sbin/ab-update.sh "$URL" 2>&1); rc=$?
+check "exit 0"           "$rc" "0"
+hasnt "no bogus refusal" "$out" "is not a RAUC bundle"
 
 echo
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES"
