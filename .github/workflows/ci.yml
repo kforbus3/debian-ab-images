@@ -218,22 +218,77 @@ jobs:
 
       - name: An update bundle installs and the machine boots the other slot
         run: |
-          # Unencrypted source: bundling from a LUKS image is not supported, and
-          # this also generates the signing key the image below has to trust.
           ./builder/run.sh --arch amd64 --distro debian --suite trixie \
             --hostname bundlesrc --username ci --password ci --image-size 8 \
             --compress none --output /output/bundle-src.img
           docker run --rm --privileged -v "$PWD/output":/output \
             --entrypoint /build/make-bundle.sh debian-ab-builder:amd64 \
             --image /output/bundle-src.img --version ci
-          # Rebuilt so the signing certificate generated above is inside it --
-          # a machine cannot be updated by a key it was not built to trust.
+          # A separate build on purpose. The two images share nothing but the
+          # signing certificate, which build-image.sh generates on the first
+          # build and every later one trusts -- so this also asserts that an
+          # update needs no certificate copied to the machine by hand.
           ./builder/run.sh --arch amd64 --distro debian --suite trixie \
             --hostname updtest --username ci --password ci --image-size 8 \
             --compress none --output /output/upd-test.img
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh | tee upd.log
           grep -q "PASS:" upd.log || { echo "::error::update did not complete"; exit 1; }
+
+      - name: The same, encrypted, across two independent builds
+        run: |
+          # The case that was broken from the start and that nothing tested.
+          # Two builds mean two luksFormat runs and two sets of LUKS UUIDs; the
+          # image used to bake its own into /etc/crypttab and into the initramfs
+          # generated from it, so installing this bundle handed the machine three
+          # volumes that exist nowhere on its disk. It waited on all of them
+          # forever, showing a blinking cursor and, on a serial console,
+          # "Waiting for encrypted source device" -- which reads like an
+          # encryption fault rather than a bundle carrying another disk's
+          # identity. Volumes are addressed by PARTLABEL now; this is what says
+          # so. Bundling from a LUKS image needs the passphrase to read the slot;
+          # the bundle it writes is plain and installs on either kind of machine.
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname encsrc --username ci --password ci --image-size 8 \
+            --compress none --encrypt --unlock keyfile --luks-passphrase testluks \
+            --output /output/enc-src.img
+          docker run --rm --privileged -v "$PWD/output":/output \
+            --entrypoint /build/make-bundle.sh debian-ab-builder:amd64 \
+            --image /output/enc-src.img --version ci-enc --luks-passphrase testluks \
+            --output /output/bundles/enc-ci.raucb
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname enctarget --username ci --password ci --image-size 8 \
+            --compress none --encrypt --unlock keyfile --luks-passphrase testluks \
+            --output /output/enc-target.img
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            -e TAG=enc -e SRC=/output/enc-target.img \
+            -e BUNDLE=/output/bundles/enc-ci.raucb \
+            -e DISK=/output/enc-update-target.img \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-update-bundle.sh | tee enc-upd.log
+          grep -q "PASS:" enc-upd.log || { echo "::error::encrypted update did not complete"; exit 1; }
+
+      - name: Every image trusts the signing certificate without being told to
+        run: |
+          # The failure this prevents is not visible until months later: an image
+          # built before any key existed shipped a keyring it could not use, and
+          # the bundle sent to it much later failed with "Verify error:
+          # self-signed certificate" -- which reads as a bad bundle. Nothing can
+          # repair that machine remotely, because the update is the thing it will
+          # not accept. So assert the property at build time, on every image.
+          want=$(openssl x509 -in output/rauc-keys/cert.pem -noout -fingerprint -sha256 | sed 's/.*=//')
+          echo "signing cert: $want"
+          fail=0
+          for j in output/*.img.json; do
+            got=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('update_keyring_sha256',''))" "$j")
+            name=$(basename "$j" .json)
+            if [ "$got" = "$want" ]; then
+              echo "  ok   $name"
+            else
+              echo "::error::$name trusts '${got:-nothing}', not the signing certificate"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
 
       - name: Image-owned files override the machine
         run: |

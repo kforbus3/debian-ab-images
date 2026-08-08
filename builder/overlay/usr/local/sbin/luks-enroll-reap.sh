@@ -41,7 +41,17 @@ fi
 log "this machine booted without a keyfile; the binding works. Removing the bootstrap key."
 
 mapfile -t ENTRIES < <(grep -vE '^\s*(#|$)' /etc/crypttab | awk '{print $1" "$2}')
-resolve() { blkid -U "${1#UUID=}" 2>/dev/null; }
+# Any spelling crypttab allows -- see the same function in luks-enroll.sh. This
+# one decides whether a bootstrap keyslot is removed, so a resolve that quietly
+# fails leaves the keyfile keyslot in place forever: no worse than not enrolling,
+# but silent, and the whole point of the reaper is that it is not silent.
+resolve() {
+    case "$1" in
+        UUID=*|LABEL=*|PARTUUID=*|PARTLABEL=*)
+            blkid -l -t "$1" -o device 2>/dev/null;;
+        *)  [ -b "$1" ] && printf '%s\n' "$1";;
+    esac
+}
 
 removed=0
 failed=0

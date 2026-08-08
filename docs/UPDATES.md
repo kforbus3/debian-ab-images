@@ -257,6 +257,44 @@ a bundle has been rolled out or merely built.
 | `server not responding` | nothing is listening at that address — the bundle server is bound to `SERVER_IP`, see [reaching the bundle server](#reaching-the-bundle-server-from-the-lan) |
 | `Signature size (…) exceeds bundle size` | the URL was answered by something that is not a bundle, usually the web UI's port |
 | `is not a RAUC bundle` | `ab-update` checked the first four bytes and they were not squashfs — wrong URL, not a bad bundle |
+| `Waiting for encrypted source device` after an update | the bundle came from an image built before v1.2.0, whose crypttab carries that build's LUKS UUIDs — see below |
+
+### Encrypted machines and update bundles
+
+An encrypted image addresses its LUKS volumes by **partition label**, not by LUKS
+UUID. `cryptsetup luksUUID` returns a value created by that `luksFormat`, so an
+image built from it describes the disk it was built on and no other — and a
+bundle carries the rootfs *and* the initramfs generated from it. Installing a
+bundle built from a different image used to hand the machine three volumes that
+exist nowhere on its disk. It waits on all three forever:
+
+```
+cryptsetup: Waiting for encrypted source device UUID=4b3dc05c-...
+cryptsetup: Waiting for encrypted source device UUID=53011643-...
+cryptsetup: Waiting for encrypted source device UUID=d424879d-...
+```
+
+The tell is that *none* of them resolve: one missing volume is a damaged disk,
+three is an image carrying somebody else's identity. Fixed in v1.2.0.
+
+A machine imaged before v1.2.0 needs its crypttab corrected once, from the other
+slot, before an update will boot — its own initramfs still has the old UUIDs:
+
+```bash
+mount /dev/mapper/luks-rootfs-b /mnt
+# Keep each line's own keyfile and options; replace only the device column.
+awk 'BEGIN{OFS="\t"} /^luks-rootfs-a/{$2="PARTLABEL=rootfs-a"} \
+     /^luks-rootfs-b/{$2="PARTLABEL=rootfs-b"} \
+     /^luks-overlay/ {$2="PARTLABEL=overlay"} {print}' /mnt/etc/crypttab > /tmp/ct
+mv /tmp/ct /mnt/etc/crypttab
+for d in dev proc sys; do mount --bind /$d /mnt/$d; done
+chroot /mnt update-initramfs -u
+ls /mnt/boot/initrd.img-*                      # confirm which kernel version
+cp /mnt/boot/initrd.img-* /boot/B/initrd.img
+for d in dev proc sys; do umount /mnt/$d; done; umount /mnt
+```
+
+Re-imaging is the simpler answer where it is available.
 
 If an update installs but a file from it seems not to have arrived, an older
 copy in the overlay is shadowing it. `ab-overlay-diff` on the machine says which

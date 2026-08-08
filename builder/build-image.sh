@@ -630,10 +630,6 @@ if [ "$ENCRYPT" = true ]; then
     [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs clevis-tpm2 tpm2-tools"
     [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs curl"
 
-    UUID_A="$(cryptsetup luksUUID "$P_A")"
-    UUID_B="$(cryptsetup luksUUID "$P_B")"
-    UUID_OVL="$(cryptsetup luksUUID "$P_OVL")"
-
     if [ "$USE_KEYFILE" = true ]; then
         # Bootstrap unlock via a keyfile embedded in the initramfs. For tpm2/tang
         # this only bootstraps the first boot; the enrollment service then binds
@@ -657,11 +653,34 @@ if [ "$ENCRYPT" = true ]; then
     # is standing in. Without the option, booting slot B cannot unlock its own
     # root, and the overlay is not opened until well after the switch to root,
     # far too late to serve as root's upper layer.
+    #
+    # PARTLABEL, not the LUKS UUID. `cryptsetup luksUUID` returns a value created
+    # by that luksFormat, so a crypttab written from it describes the loopback
+    # file this build happened to use and nothing else. That is fine for the
+    # machine imaged from it, and fatal for an update: a bundle carries this
+    # rootfs *and* the initramfs generated from it, so installing one built from
+    # a different image hands the machine three UUIDs that exist nowhere on its
+    # disk. It boots to
+    #
+    #   cryptsetup: Waiting for encrypted source device UUID=...
+    #
+    # forever, on all three volumes at once, and the only clue that this is about
+    # provenance rather than encryption is that *none* of them resolve.
+    #
+    # The partition labels come from `parted mkpart` above, are identical in
+    # every build, and survive being written to a disk because they live in the
+    # GPT. Debian resolves PARTLABEL= with blkid rather than a udev symlink
+    # (/lib/cryptsetup/functions, _resolve_device_spec), so it works this early.
+    # system.conf already addressed the slots this way; this is the same rule --
+    # nothing unique to one disk belongs in an image that gets copied.
     cat > "$MNT/etc/crypttab" <<EOF
 # <name>          <device>                 <keyfile>     <options>
-luks-rootfs-a     UUID=$UUID_A             $KEYREF_A     luks,discard,initramfs$NETOPT
-luks-rootfs-b     UUID=$UUID_B             $KEYREF_B     luks,discard,initramfs$NETOPT
-luks-overlay      UUID=$UUID_OVL           $KEYREF_OVL   luks,discard,initramfs$NETOPT
+#
+# Addressed by partition label so this file is true on any machine imaged from
+# any build. Do not "fix" these to UUIDs: see build-image.sh for what that costs.
+luks-rootfs-a     PARTLABEL=rootfs-a       $KEYREF_A     luks,discard,initramfs$NETOPT
+luks-rootfs-b     PARTLABEL=rootfs-b       $KEYREF_B     luks,discard,initramfs$NETOPT
+luks-overlay      PARTLABEL=overlay        $KEYREF_OVL   luks,discard,initramfs$NETOPT
 EOF
 fi
 
@@ -1025,6 +1044,7 @@ if [ ! -f "$RAUC_CERT" ] && [ "$RAUC_CERT" = "/output/rauc-keys/cert.pem" ]; the
     chmod 600 "$RAUC_KEYDIR/key.pem" 2>/dev/null || true
 fi
 
+KEYRING_FP=""
 if [ -f "$RAUC_CERT" ]; then
     log "Trusting the update signing certificate ($RAUC_CERT)"
     cp "$RAUC_CERT" "$MNT/etc/rauc/keyring.pem"
@@ -1039,6 +1059,15 @@ elif [ ! -f "$MNT/etc/rauc/keyring.pem" ]; then
     log "         bundle until it is rebuilt against a certificate."
     : > "$MNT/etc/rauc/keyring.pem"
 fi
+
+# Read while the slot is still mounted, and recorded in the sidecar below. It is
+# the one property of an image that cannot be discovered afterwards without
+# mounting it, cannot be changed once the machine is deployed, and decides
+# whether any bundle will ever install on it. Empty means this image trusts
+# nothing, which is worth being able to see without booting the thing.
+KEYRING_FP="$(openssl x509 -in "$MNT/etc/rauc/keyring.pem" -noout -fingerprint -sha256 2>/dev/null \
+              | sed 's/.*=//' || true)"
+log "Update keyring fingerprint: ${KEYRING_FP:-<none — this image accepts no updates>}"
 
 # Configure first-boot TPM/Tang enrollment.
 if [ "$ENCRYPT" = true ] && { [ "$UNLOCK" = tpm2 ] || [ "$UNLOCK" = tang ]; }; then
@@ -1169,6 +1198,7 @@ cat > "${OUT}.json" <<EOF
   "image_size_mib": $TOTAL_MIB,
   "root_size_mib": $ROOT_SIZE,
   "encrypted": $ENCRYPT,
+  "update_keyring_sha256": "$KEYRING_FP",
   "unlock": "$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo none)",
   "compress": "$COMPRESS",
   "created": "$(date -u +%FT%TZ)"
