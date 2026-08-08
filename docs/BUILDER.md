@@ -276,24 +276,51 @@ machine unlocks at boot with `--unlock`:
 |--------|-------------|--------------|----------|
 | `tpm2` | ✅ (sealed to the TPM) | ❌ | Targets have a TPM 2.0 — **most secure auto-unlock** |
 | `tang` | ✅ (from a Tang server) | ❌ | No TPM, but a trusted LAN — **best no-TPM auto-unlock** |
-| `keyfile` | ✅ (key in initramfs) | ⚠️ yes | Anywhere, but weak at-rest protection — convenience only |
+| `keyfile` | ✅ (key on the BOOT partition) | ⚠️ yes | Anywhere, but weak at-rest protection — convenience only |
 | `passphrase` | ❌ (prompt at boot) | ❌ | Maximum security, attended boots |
 
 The passphrase you pass is always enrolled as a **recovery** key.
 
-**How tpm2/tang stay unattended *and* keyless:** the image ships with a bootstrap
-keyfile in the initramfs so the very first boot unlocks on its own. Enrollment
-then happens over the following two boots:
+**Where the bootstrap key lives.** On the BOOT partition, at `ab-keys/luks.key`,
+not inside the image. `scripts/init-premount/ab-luks-key` copies it into the
+initramfs at boot, before cryptroot runs, and crypttab points at that runtime
+path.
+
+This is not a detail. The key used to be baked into the image and therefore into
+the initramfs — and a bundle carries the rootfs *and* the initramfs built from
+it, so an update delivered the *builder's* key. Every encrypted machine given a
+bundle from a different build dropped to an initramfs shell:
+
+```
+No key available with this passphrase.
+ALERT!  LABEL=rootfs-b does not exist.  Dropping to a shell!
+```
+
+BOOT is shared by both slots and is not part of a bundle, so the key there is the
+machine's own and survives every update. It is no worse protected than before —
+it was already on that same plaintext partition, inside the initramfs — and it is
+no longer copied into every image and every bundle built from one.
+
+**How tpm2/tang stay unattended *and* keyless:** the bootstrap key above makes the
+very first boot unlock on its own. Enrollment then happens over the following two
+boots:
 
 1. `luks-enroll` binds every volume to the TPM (or Tang) with **clevis**, checks
    that the binding really recovers the key, rebuilds the initramfs without the
    keyfile in it, and checks *that* — the initramfs must contain the clevis
    unlock hook, the TPM libraries, and no key material. The new initramfs is
    copied into **both** slots. The bootstrap key is still there, untouched.
-2. The next boot unlocks through the TPM, because there is no longer a keyfile in
-   the initramfs that could do it instead. Having proved that, `luks-enroll-reap`
-   removes the bootstrap keyslot and deletes the keyfile — so from then on no key
-   remains on disk.
+2. The next boot unlocks through the TPM, because crypttab no longer names the
+   bootstrap key and so nothing fetches it. Having proved that,
+   `luks-enroll-reap` removes the bootstrap keyslot and deletes
+   `/boot/ab-keys/luks.key` — so from then on no key remains on disk.
+
+   The proof is what makes this safe, and it takes care now that no initramfs
+   carries a key: `hooks/ab-luks-key` marks an initramfs when crypttab still
+   points at the bootstrap key, and the reaper refuses to touch the keyslot
+   unless that marker is absent. Without it every initramfs would look keyless
+   and the keyslot would be destroyed on a boot the bootstrap key had just
+   unlocked — a machine that then never boots again.
 
 If anything fails at any point, the bootstrap keyfile stays and the machine keeps
 booting unattended; enrollment retries on the next boot. The key is only ever

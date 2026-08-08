@@ -287,6 +287,15 @@ jobs:
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             -e IMAGE=/output/enc-target.img -e LUKS_PASSPHRASE=testluks \
             --entrypoint bash debian-ab-builder:amd64 /s/test-image-portability.sh
+          # Then the cross-build question itself, without booting: take the
+          # initramfs out of the bundle, run it against the *other* image's
+          # disk, and check it unlocks. Both bugs that broke encrypted updates
+          # fail here in seconds, with the reason, instead of fifteen minutes
+          # later as a timeout.
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            -e MACHINE=/output/enc-target.img -e SOURCE=/output/enc-src.img \
+            -e BUNDLE=/output/bundles/enc-ci.raucb -e LUKS_PASSPHRASE=testluks \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-cross-build-update.sh
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             -e TAG=enc -e SRC=/output/enc-target.img \
             -e BUNDLE=/output/bundles/enc-ci.raucb \

@@ -54,9 +54,18 @@ Optional LUKS2 encryption (`--encrypt`) covers both root slots and the overlay
   exists.
 - **`tang`** — key fetched from a Tang server on a trusted LAN (NBDE); never on
   disk. Best no-TPM auto-unlock.
-- **`keyfile`** — key embedded in the initramfs on the same disk. Convenient and
-  universal, but provides **weak at-rest protection** (pulling the disk yields
-  the key). Prefer `tpm2`/`tang` for real protection.
+- **`keyfile`** — key stored on the unencrypted BOOT partition of the same disk
+  (`ab-keys/luks.key`, mode 0400) and copied into the initramfs at boot.
+  Convenient and universal, but provides **weak at-rest protection** (pulling the
+  disk yields the key). Prefer `tpm2`/`tang` for real protection.
+
+  It lives there rather than inside the image because an update replaces the root
+  slot *and* the initramfs built from it: a key baked into an image is the
+  builder's key, not the machine's, and delivering one by bundle left encrypted
+  machines unbootable. Exposure is unchanged — the key was already on that same
+  plaintext partition, inside the initramfs — but it is no longer duplicated into
+  every image, and **no longer shipped inside update bundles**, which are
+  published over plain HTTP for any machine to fetch.
 - **`passphrase`** — prompt at boot; most secure, not unattended.
 
 For `tpm2`/`tang`, a bootstrap keyfile makes the first boot unattended. Enrollment

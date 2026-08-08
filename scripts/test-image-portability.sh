@@ -122,7 +122,8 @@ if mount -o ro "/dev/${BB}p3" /mnt/pboot 2>/dev/null; then
     for f in A/initrd.img B/initrd.img; do
         [ -f "/mnt/pboot/$f" ] && pass "slot initramfs present: $f"
     done
-    umount /mnt/pboot
+    # Left mounted on purpose; the initramfs check below reads from it and the
+    # EXIT trap unmounts it.
 else
     bad "could not mount the BOOT partition"
 fi
@@ -136,10 +137,32 @@ if [ -f /mnt/pslot/etc/initramfs-tools/scripts/init-premount/ab-luks-key ]; then
 else
     bad "init-premount/ab-luks-key is missing; nothing would supply the key"
 fi
-if grep -q 'KEYFILE_PATTERN' /mnt/pslot/etc/cryptsetup-initramfs/conf-hook 2>/dev/null; then
+# Anchored, because Debian's shipped conf-hook documents the setting in four
+# comment lines including a commented-out `#KEYFILE_PATTERN=`. An unanchored
+# grep calls a correct image broken, which is a worse test than none: it trains
+# whoever sees it to disbelieve the suite.
+if grep -qE '^[[:space:]]*KEYFILE_PATTERN=' /mnt/pslot/etc/cryptsetup-initramfs/conf-hook 2>/dev/null; then
     bad "KEYFILE_PATTERN is set — the initramfs would bake in a build-time key"
+    grep -nE '^[[:space:]]*KEYFILE_PATTERN=' /mnt/pslot/etc/cryptsetup-initramfs/conf-hook | sed 's/^/       /'
 else
-    pass "no KEYFILE_PATTERN"
+    pass "no active KEYFILE_PATTERN"
+fi
+
+echo "--- and the generated initramfs proves it ---"
+# The end of the chain: whatever the config says, this is what the machine boots.
+if command -v lsinitramfs >/dev/null 2>&1 && [ -f /mnt/pboot/A/initrd.img ]; then
+    L="$(lsinitramfs /mnt/pboot/A/initrd.img 2>/dev/null)"
+    printf '%s\n' "$L" | grep -q 'init-premount/ab-luks-key' \
+        && pass "slot A initramfs contains the key-fetch script" \
+        || bad "slot A initramfs has no key-fetch script; it would prompt at boot"
+    printf '%s\n' "$L" | grep -q 'cryptkey/bootstrap-key-in-use' \
+        && pass "and the marker luks-enroll-reap depends on" \
+        || bad "no bootstrap marker; the reaper would call this initramfs keyless"
+    printf '%s\n' "$L" | grep -q 'cryptsetup-keys\.d' \
+        && bad "the initramfs still carries a build-time keyfile" \
+        || pass "and no key material of its own"
+else
+    echo "  (lsinitramfs unavailable or no slot kernel; skipping)"
 fi
 
 echo ""
