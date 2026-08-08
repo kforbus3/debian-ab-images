@@ -105,12 +105,25 @@ initramfs on a running machine must therefore copy it into the slot's directory
 or GRUB will not load it:
 
 ```bash
-ab-sync-boot            # copy this machine's current kernel+initramfs into its slot
+ab-sync-boot                # copy this machine's kernel+initramfs into its slot
+ab-sync-boot --slot both    # ...and into the other slot, if it runs the same kernel
 ```
 
 `luks-enroll` already does this — it regenerates the initramfs so the machine
 can unlock via TPM or Tang, and without the copy the machine would come back
 asking for a passphrase.
+
+It uses `--slot both`, because enrollment changes how *every* volume in
+`/etc/crypttab` is unlocked, including the other slot's root. Syncing only the
+running slot left the other one holding an initramfs whose embedded keyfile no
+longer opened anything — an A/B pair with one dead half and nothing to say so.
+
+`--slot both` writes the other slot only when it is safe to: an initramfs carries
+the modules of exactly one kernel, so the other slot gets a new initramfs only if
+its kernel is byte-identical to the running one (or if it has no kernel yet).
+Once an update has put a different kernel in the other slot, `ab-sync-boot` says
+so and leaves it alone rather than pairing an initramfs with a kernel it was not
+built for.
 
 **Still not updated by a bundle:** `grub.cfg` itself, the GRUB binaries in the
 ESP, and the partition layout. Changing those needs a re-image.

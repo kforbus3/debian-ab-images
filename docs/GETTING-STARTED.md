@@ -152,7 +152,8 @@ On its first boot, each freshly imaged machine automatically:
    and stores them in the persistent overlay, so they stay stable across A/B
    updates. (Expect the SSH host key to be new the first time you connect.)
 3. If encrypted with `tpm2`/`tang`: **enrolls** the LUKS volumes to the TPM or
-   Tang server and destroys the bootstrap keyfile.
+   Tang server and stages a keyless initramfs. The bootstrap keyfile is destroyed
+   one boot later, once that boot has proved the machine can unlock without it.
 4. Marks the booted slot "good", arming the A/B fallback logic.
 
 Then log in as the user you baked in (`USERNAME`/`PASSWORD` or your SSH key).

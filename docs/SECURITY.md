@@ -59,10 +59,29 @@ Optional LUKS2 encryption (`--encrypt`) covers both root slots and the overlay
   the key). Prefer `tpm2`/`tang` for real protection.
 - **`passphrase`** — prompt at boot; most secure, not unattended.
 
-For `tpm2`/`tang`, a bootstrap keyfile makes the first boot unattended, then a
-first-boot service enrolls the TPM/Tang and **destroys the keyfile**, leaving no
-key on disk. The `--luks-passphrase` you supply is always kept as a recovery key —
-store it safely. See [BUILDER.md](BUILDER.md#disk-encryption-luks2).
+For `tpm2`/`tang`, a bootstrap keyfile makes the first boot unattended. Enrollment
+then binds the volumes with clevis and stages a keyless initramfs, and only after
+the **next** boot has come up through it — proving the machine no longer needs the
+keyfile — is the bootstrap keyslot destroyed. A failure at any stage leaves the
+keyfile in place and retries, so no machine is left unable to unlock itself.
+
+A `tpm2` binding is sealed to **PCR 7** (Secure Boot policy state) by default, not
+to the PCRs that measure the boot chain. PCR 7 does not move when the kernel or
+initramfs changes, so the binding survives an A/B update and works from the
+recovery GRUB entries as well as the normal ones. Override with `--tpm2-pcrs` if
+your threat model calls for it, knowing that sealing to 8/9 means re-enrolling on
+every update.
+
+The `--luks-passphrase` you supply is always kept as a recovery key — store it
+safely. See [BUILDER.md](BUILDER.md#disk-encryption-luks2).
+
+> **Images built before this**, with `--unlock tpm2`, enrolled via
+> `systemd-cryptenroll` and wrote `tpm2-device=auto` into `/etc/crypttab`. Debian's
+> initramfs-tools does not implement that option, so those machines cannot unlock
+> at all once the bootstrap keyfile is destroyed — on either slot, and from every
+> GRUB entry, because LUKS is unlocked long before the kernel command line is
+> read. Unlock with the recovery passphrase (the prompt goes to `ttyS0`, not the
+> monitor) and re-image, or re-add a keyfile keyslot by hand.
 
 ### Where the recovery passphrase lives
 

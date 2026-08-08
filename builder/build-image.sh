@@ -56,6 +56,12 @@ ENCRYPT="${ENCRYPT:-false}"
 UNLOCK="${UNLOCK:-keyfile}"             # passphrase | keyfile | tpm2 | tang
 LUKS_PASS="${LUKS_PASS:-}"
 TANG_URL="${TANG_URL:-}"
+# Which TPM PCRs a tpm2 binding is sealed against. 7 is the Secure Boot policy
+# state: stable across kernel and initramfs changes, so a binding survives an
+# A/B update. Sealing to the PCRs that measure the boot chain itself (8, 9)
+# would break on every update, and would differ between the normal and recovery
+# GRUB entries -- making the recovery entries the one thing that cannot unlock.
+TPM2_PCRS="${TPM2_PCRS:-7}"
 
 usage() {
     cat <<EOF
@@ -113,6 +119,7 @@ Usage: $0 [options]
                           Prefer this over --luks-passphrase: an argument is visible
                           in \`ps\` to every user on the build host.
   --tang-url URL          Tang server URL (required for --unlock tang)
+  --tpm2-pcrs LIST        PCRs to seal to with --unlock tpm2 (default: $TPM2_PCRS)
   -h, --help              Show this help
 EOF
 }
@@ -164,6 +171,7 @@ volatile ${2%%:*} $(case "$2" in *:*) echo "${2##*:}";; esac)"; shift 2;;
             [ -n "$LUKS_PASS" ] || die "--luks-passphrase-file: '$2' is empty"
             shift 2;;
         --tang-url) TANG_URL="$2"; shift 2;;
+        --tpm2-pcrs) TPM2_PCRS="$2"; shift 2;;
         -h|--help) usage; exit 0;;
         *) echo "Unknown option: $1" >&2; usage; exit 1;;
     esac
@@ -608,7 +616,18 @@ EOF
 CRYPT_PACKAGES=""
 if [ "$ENCRYPT" = true ]; then
     CRYPT_PACKAGES="cryptsetup cryptsetup-initramfs"
-    [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES tpm2-tools libtss2-tcti-device0 systemd-cryptsetup"
+    # Both auto-unlock methods go through clevis, because clevis-initramfs is
+    # the only one of the available mechanisms that Debian's initramfs-tools
+    # can call at unlock time. tpm2 used to use systemd-cryptenroll and write
+    # `tpm2-device=auto` into crypttab -- a systemd-cryptsetup option, which
+    # this initrd is not and never invokes. Enrollment succeeded, the keyslot
+    # was real, and nothing in the boot path could use it. See luks-enroll.sh.
+    # No explicit libtss2-*: clevis-tpm2 depends on tpm2-tools, which pulls the
+    # whole TCTI set including the device one. The old list named
+    # libtss2-tcti-device0, which no longer exists in trixie and installs today
+    # only through a transitional Provides on libtss2-tcti-device0t64 -- a name
+    # that will rot. Depending on clevis-tpm2 is the durable spelling.
+    [ "$UNLOCK" = tpm2 ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs clevis-tpm2 tpm2-tools"
     [ "$UNLOCK" = tang ] && CRYPT_PACKAGES="$CRYPT_PACKAGES clevis clevis-luks clevis-initramfs curl"
 
     UUID_A="$(cryptsetup luksUUID "$P_A")"
@@ -875,6 +894,7 @@ if [ "$ENCRYPT" = true ]; then
         "$MNT/etc/rauc/system.conf"
 fi
 chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-enroll.sh" \
+         "$MNT/usr/local/sbin/luks-enroll-reap.sh" \
          "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
          "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
          "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh" \
@@ -991,8 +1011,13 @@ if [ "$ENCRYPT" = true ] && { [ "$UNLOCK" = tpm2 ] || [ "$UNLOCK" = tang ]; }; t
     cat > "$MNT/etc/luks-enroll.conf" <<EOF
 METHOD=$UNLOCK
 TANG_URL=$TANG_URL
+TPM2_PCRS=$TPM2_PCRS
 EOF
-    chroot "$MNT" systemctl enable luks-enroll.service
+    # Both phases are enabled here; which one does anything is decided by the
+    # stamps in /var/lib, via ConditionPathExists on the units. Phase 2 is inert
+    # until phase 1 has bound and staged, and both are inert once enrollment is
+    # complete -- so enabling them unconditionally costs a condition check.
+    chroot "$MNT" systemctl enable luks-enroll.service luks-enroll-reap.service
 fi
 
 # Rebuild the initramfs so it includes cryptsetup, crypttab, and any keyfiles.

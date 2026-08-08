@@ -28,7 +28,8 @@ Flow (`build-image.sh`):
 The `BOOT` **partition** is shared, but the kernel is not: each slot has its own
 `vmlinuz` and `initrd.img` under `/A/` and `/B/`, so an update replaces the
 inactive slot's kernel without touching the running one and a rollback gets the
-kernel it was built against. `ab-sync-boot.sh` maintains those copies;
+kernel it was built against. `ab-sync-boot.sh` maintains those copies (`--slot both` when a change affects
+both slots, such as LUKS enrollment);
 `ab-kernel-hook.sh` says plainly that an apt-installed kernel will not be booted.
 
 GRUB's prefix is on the `BOOT` partition; `grub.cfg` selects a slot from `ORDER`,
