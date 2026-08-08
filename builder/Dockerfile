@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         rauc \
         squashfs-tools \
+        # lsinitramfs, so the tests can look inside a built initramfs. The
+        # config saying no key is baked in is not the same claim as the
+        # initramfs not containing one, and only the second one boots.
+        initramfs-tools-core \
         openssl \
         qemu-user-static \
         binfmt-support \
