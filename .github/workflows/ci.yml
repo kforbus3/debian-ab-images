@@ -228,14 +228,30 @@ jobs:
 
       - name: Image-owned files override the machine
         run: |
-          mkdir -p overlay.d/etc
-          printf '127.0.0.1 localhost\n10.0.2.50 ci-fileserver\n' > overlay.d/etc/hosts
+          # The fixture here is not arbitrary: test-image-customization.sh greps
+          # for corp-fileserver, /etc/netplan/10-corp.yaml and
+          # /etc/ab-custom-marker by name. It shipped only an /etc/hosts naming
+          # a different host and no --run-script at all, so three of its
+          # assertions could never pass. Nobody saw it, because the update step
+          # above failed first and this one never ran.
+          mkdir -p overlay.d/etc/netplan
+          printf '127.0.0.1 localhost\n10.0.2.50 corp-fileserver\n' > overlay.d/etc/hosts
+          printf 'network:\n  version: 2\n  renderer: networkd\n' > overlay.d/etc/netplan/10-corp.yaml
+          # Deliberately NOT in overlay.d: everything there is copied into the
+          # image and recorded as image-owned, and a build script is not part of
+          # the image. /output is mounted into the builder, so it is reachable.
+          printf '#!/bin/sh\ntouch /etc/ab-custom-marker\n' > output/custom.sh
+          chmod +x output/custom.sh
           ./builder/run.sh --arch amd64 --distro debian --suite trixie \
             --hostname customtest --username ci --password ci --image-size 8 \
-            --compress none --own-path /etc/resolv.conf --output /output/custom-test.img
+            --compress none --own-path /etc/resolv.conf \
+            --run-script /output/custom.sh --output /output/custom-test.img
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
             --entrypoint bash debian-ab-builder:amd64 /s/test-image-customization.sh | tee custom.log
           grep -q "PASS:" custom.log || { echo "::error::image-owned override failed"; exit 1; }
+          # Leave overlay.d as it was found: the next step builds three more
+          # images from this workspace and must not inherit this fixture.
+          rm -rf overlay.d/etc
 
       - name: Each state model boots and lays out what its manifest says
         run: |
