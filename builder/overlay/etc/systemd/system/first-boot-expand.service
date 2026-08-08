@@ -7,6 +7,12 @@ Description=Grow overlay partition to fill disk on first boot
 # overlay` could find nothing — and the old script treated that as "nothing to
 # do", stamped itself done and disabled itself, permanently.
 RequiresMountsFor=/var/lib/overlay
+# /boot too: `cryptsetup resize` on the encrypted overlay needs a key, and the
+# bootstrap key lives on the BOOT partition (crypttab names /cryptkey/luks.key,
+# which exists only inside the initramfs). Without this the resize would fall
+# back to "no usable key" depending on mount ordering, and the overlay would
+# quietly stay at its minimum size.
+RequiresMountsFor=/boot
 After=local-fs.target
 Before=multi-user.target
 # Run before LUKS enrollment. On a tpm2/tang image, luks-enroll binds the

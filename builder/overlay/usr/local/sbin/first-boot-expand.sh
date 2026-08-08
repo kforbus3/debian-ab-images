@@ -49,6 +49,12 @@ fix_gpt() {
 crypt_resize() {
     local mapname="$1" keyfile
     keyfile="$(awk -v n="$mapname" '$1==n && $3!="" && $3!="none" {print $3; exit}' /etc/crypttab 2>/dev/null)"
+    # crypttab names /cryptkey/luks.key, which exists only inside the initramfs:
+    # the key itself lives on the BOOT partition so that an update, which
+    # replaces the initramfs, cannot take it away. Mounted, that is /boot.
+    if [ ! -r "${keyfile:-}" ] && [ -r /boot/ab-keys/luks.key ]; then
+        keyfile=/boot/ab-keys/luks.key
+    fi
     if [ -n "${keyfile:-}" ] && [ -r "$keyfile" ]; then
         if cryptsetup resize "$mapname" --key-file "$keyfile"; then
             log "  cryptsetup resize ok (keyfile)"; return 0

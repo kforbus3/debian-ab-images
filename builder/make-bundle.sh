@@ -177,10 +177,24 @@ log "compatible=$COMPATIBLE  version=$VERSION"
 #
 # squashfs-tools is still required in the builder even though the payload is a
 # tar: rauc builds the bundle container itself with mksquashfs.
+# No LUKS key material in a bundle, ever. Bundles are published over plain HTTP
+# for any machine to fetch, and an image built before the key moved to the BOOT
+# partition keeps it in /etc/cryptsetup-keys.d -- so bundling one of those used
+# to put the keys to its own disks on a web server. Excluded rather than
+# refused: the bundle is still perfectly installable without them, because the
+# machine gets its key from its own BOOT partition.
+if [ -n "$(ls -A "$WORK/slot/etc/cryptsetup-keys.d" 2>/dev/null)" ]; then
+    log "NOTE: this image carries LUKS keyfiles in /etc/cryptsetup-keys.d."
+    log "      They are being left out of the bundle -- a bundle is published,"
+    log "      and key material has no business in one. Rebuild the image to"
+    log "      keep the key on the BOOT partition where an update cannot reach it."
+fi
+
 log "Packing the root slot (this is the slow part)"
 tar --numeric-owner --xattrs --xattrs-include='*' \
     --warning=no-file-ignored --warning=no-file-changed \
-    -C "$WORK/slot" -czf "$WORK/bundle/rootfs.tar.gz" . 
+    --exclude='./etc/cryptsetup-keys.d/*' \
+    -C "$WORK/slot" -czf "$WORK/bundle/rootfs.tar.gz" .
 
 # RAUC makes a fresh filesystem in the target slot, and a fresh ext4 has no
 # label. GRUB boots by root=LABEL=rootfs-a|b, so without this the updated slot
