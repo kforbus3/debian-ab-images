@@ -846,12 +846,30 @@ def read_env() -> dict:
 
 
 def write_env(cfg: dict) -> None:
+    # Everything in the file that this page does not manage is carried across.
+    # The file is rewritten from ENV_KEYS alone, so anything hand-added -- the
+    # UPDATE_IP that publishes /bundles/ on the LAN, for one -- used to vanish
+    # the first time somebody saved the Provisioning page, taking OTA with it
+    # and giving no sign that it had happened.
+    preserved: dict[str, str] = {}
+    if os.path.isfile(ENV_PATH):
+        for line in open(ENV_PATH):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                if k.strip() not in ENV_KEYS:
+                    preserved[k.strip()] = v.strip()
+
     os.makedirs(os.path.dirname(ENV_PATH), exist_ok=True)
     with open(ENV_PATH, "w") as f:
         f.write("# Managed by the web UI\n")
         for k in ENV_KEYS:
             if cfg.get(k):
                 f.write(f"{k}={cfg[k]}\n")
+        if preserved:
+            f.write("\n# Set by hand; left alone by the web UI.\n")
+            for k, v in preserved.items():
+                f.write(f"{k}={v}\n")
     # Per-machine scripts embed the server IP and the default action, so they
     # go stale the moment either changes. Rewrite them from the stored
     # assignments rather than leaving machines pointed at the old address.
