@@ -59,14 +59,44 @@ for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
 done
 
 # --- install a probe into slot A ---------------------------------------------
-ROOTP=""
+#
+# On an encrypted image the root slot is a LUKS container, so mounting the
+# partition cannot work and the search below found nothing ("no root slot
+# found") before a single boot had happened. Open any crypto_LUKS partition
+# first and search the mapper instead. LUKS_PASSPHRASE is what the image was
+# built with; without it, encrypted images are simply skipped rather than
+# reported as a broken harness.
+OPENED=""
+cleanup_luks() {
+    for m in $OPENED; do
+        umount "/dev/mapper/$m" 2>/dev/null || true
+        cryptsetup close "$m" 2>/dev/null || true
+    done
+    OPENED=""
+}
+trap 'cleanup_luks' EXIT
+
+# Deliberately not a function returning a list: command substitution runs in a
+# subshell, so every mapper it opened would be invisible to cleanup_luks and
+# stay open after the script exits, holding the loop device that QEMU is about
+# to boot from.
+ROOTDEV=""
 mkdir -p /mnt/slot /mnt/boot
 for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
-    mount "/dev/${BB}p$n" /mnt/slot 2>/dev/null || continue
-    if [ -d /mnt/slot/etc/rauc ] && [ -d /mnt/slot/usr/local/sbin ]; then ROOTP="$n"; break; fi
+    dev="/dev/${BB}p$n"
+    if [ "$(blkid -o value -s TYPE "$dev" 2>/dev/null)" = "crypto_LUKS" ]; then
+        [ -n "${LUKS_PASSPHRASE:-}" ] || continue
+        map="abtest-p$n"
+        printf '%s' "$LUKS_PASSPHRASE" | cryptsetup open "$dev" "$map" - 2>/dev/null || continue
+        OPENED="$OPENED $map"
+        dev="/dev/mapper/$map"
+    fi
+    mount "$dev" /mnt/slot 2>/dev/null || continue
+    if [ -d /mnt/slot/etc/rauc ] && [ -d /mnt/slot/usr/local/sbin ]; then ROOTDEV="$dev"; break; fi
     umount /mnt/slot
 done
-[ -n "$ROOTP" ] || fail "no root slot found"
+[ -n "$ROOTDEV" ] || fail "no root slot found (encrypted image without LUKS_PASSPHRASE?)"
+echo "  root slot: $ROOTDEV"
 
 cat > /mnt/slot/usr/local/sbin/ab-update-probe.sh <<PROBE
 #!/bin/sh
@@ -145,6 +175,9 @@ mount "/dev/${BB}p3" /mnt/boot 2>/dev/null && {
     fi
     umount /mnt/boot
 }
+# Every mapper has to be closed before the loop device goes, or losetup -d
+# leaves the disk held open and QEMU boots a file the kernel is still writing.
+cleanup_luks
 losetup -d "$LO"
 
 # --- serve the bundle to the guest -------------------------------------------
@@ -181,7 +214,9 @@ http {
 EOF
 nginx &
 HTTPD=$!
-trap 'kill $HTTPD 2>/dev/null' EXIT
+# Replaces the cleanup_luks trap, so it has to keep doing that job too --
+# otherwise a failure between here and the end leaves mappers open.
+trap 'kill $HTTPD 2>/dev/null; cleanup_luks' EXIT
 sleep 1
 # Fail here rather than 900 seconds into a boot that could never have worked.
 curl -fsS -o /dev/null -r 0-3 "http://127.0.0.1:${PORT}/bundles/$(basename "$BUNDLE")" \
