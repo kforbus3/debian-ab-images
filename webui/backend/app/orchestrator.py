@@ -481,15 +481,84 @@ LOW_DISK_GB = 12.0
 
 
 # --------------------------- builds ---------------------------
+class NameInUse(Exception):
+    """An explicitly requested image name already exists in the library."""
+
+    def __init__(self, name: str, suggestion: str):
+        self.name = name
+        self.suggestion = suggestion
+        super().__init__(f"{name} already exists")
+
+
+def _image_name_taken(base: str) -> bool:
+    """True if any build product for this base name is already in the library.
+
+    Every extension, not just the one this build would write: an uncompressed
+    build must not quietly land beside the .zst of the same name, because the
+    two are different images with one identity and the Updates page would offer
+    a choice between them by name alone.
+    """
+    out = settings.output_dir
+    return any(os.path.exists(os.path.join(out, base + ext))
+               for ext in (".img", ".img.zst", ".img.gz"))
+
+
 def image_output_name(opts: dict) -> str:
     """The image file a build with these options will produce, before compression.
 
     Shared with the caller because a passphrase has to be filed under this name
     in the secrets manager *before* the build that produces it starts, and the
-    two must not be able to disagree about what it is.
+    two must not be able to disagree about what it is. resolve_output_name()
+    settles the question once per build and writes the answer back into opts, so
+    this only ever reads it.
     """
+    resolved = str(opts.get("name") or "").strip()
+    if resolved:
+        return resolved if resolved.endswith(".img") else resolved + ".img"
     return (f"{opts.get('distro', 'debian')}-{opts.get('suite', 'trixie')}-"
             f"{opts.get('arch', 'amd64')}-ab.img")
+
+
+def resolve_output_name(opts: dict) -> str:
+    """Decide what this build will be called, and make sure it takes nothing.
+
+    The name used to be distro-suite-arch alone, so a second Debian 13 amd64
+    build silently replaced the first. That is not only a lost file: the image
+    a deployed machine was made from is what a bundle for it must be built from,
+    and the LUKS passphrase in the secrets manager is filed *under this name* --
+    so rebuilding overwrote the recovery key of a machine already in the field,
+    which nothing would have revealed until someone needed it.
+
+    No name given: a free one is chosen, so the default can never overwrite.
+    A name given: it is honoured, and refused if taken unless `replace` says so.
+    """
+    explicit = str(opts.get("name") or "").strip()
+    if explicit:
+        base = os.path.basename(explicit)
+        for ext in (".img.zst", ".img.gz", ".img"):
+            if base.endswith(ext):
+                base = base[: -len(ext)]
+                break
+        base = re.sub(r"[^A-Za-z0-9._-]", "-", base).strip("-.") or "image"
+        if _image_name_taken(base) and not opts.get("replace"):
+            raise NameInUse(base + ".img", _free_name(base))
+        opts["name"] = base + ".img"
+        return opts["name"]
+
+    base = (f"{opts.get('distro', 'debian')}-{opts.get('suite', 'trixie')}-"
+            f"{opts.get('arch', 'amd64')}-ab")
+    opts["name"] = _free_name(base)
+    return opts["name"]
+
+
+def _free_name(base: str) -> str:
+    """`base.img`, or base-2, base-3 … — the first that is not in the library."""
+    if not _image_name_taken(base):
+        return base + ".img"
+    for n in range(2, 1000):
+        if not _image_name_taken(f"{base}-{n}"):
+            return f"{base}-{n}.img"
+    raise RuntimeError(f"could not find a free name based on {base}")
 
 
 def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:

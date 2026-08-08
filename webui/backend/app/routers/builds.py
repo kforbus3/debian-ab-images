@@ -87,6 +87,23 @@ async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
     _validate_build(opts)
     if jobs.running(type="image"):
         raise HTTPException(409, "An image build is already running")
+    # Settle the output name before anything is keyed on it. Both the passphrase
+    # filing below and the build command derive from it, and they must not be
+    # able to disagree -- resolve_output_name writes the answer into opts so
+    # they read rather than recompute.
+    try:
+        out_name = orch.resolve_output_name(opts)
+    except orch.NameInUse as exc:
+        raise HTTPException(409, {
+            "detail": f"An image named {exc.name} is already in the library. "
+                      f"Building over it would replace the image a deployed machine "
+                      f"was made from, and with it the LUKS passphrase filed under "
+                      f"that name.",
+            "name": exc.name,
+            "suggestion": exc.suggestion,
+        })
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
     # The customization script travels through the output directory, which the
     # builder already mounts. Written before the job starts so a failure to
     # write it is reported here rather than as a confusing build error.
@@ -106,7 +123,10 @@ async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
     stored_at = await _store_generated_passphrase(opts)
     cmd, label, env = orch.build_image_cmd(opts)
     job = await jobs.start(type="image", label=label, cmd=cmd, now=orch.now(), env=env)
-    return {**job.public(), "passphrase_stored_at": stored_at}
+    # The name is returned because the build may not have got the one that was
+    # asked for: with no name given, a free one is chosen rather than replacing
+    # what is already there, and the operator should see which.
+    return {**job.public(), "passphrase_stored_at": stored_at, "image_name": out_name}
 
 
 async def _store_generated_passphrase(opts: dict) -> str:

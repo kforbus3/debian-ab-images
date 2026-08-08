@@ -28,6 +28,7 @@ export default function Build() {
   const toast = useToast();
   const [opts, setOpts] = useState({
     distro: "debian", suite: "trixie", arch: "amd64",
+    name: "", replace: false,
     hostname: "debian-ab", username: "admin", password: "",
     image_size: 0, root_size: 3072, compress: "zstd", packages: "",
     ssh_key: "", ssh_key_only: false,
@@ -91,8 +92,23 @@ export default function Build() {
       // Said once, at the moment it becomes true. The passphrase is written
       // before the build starts, so this is already a fact rather than a plan.
       if (data.passphrase_stored_at) toast.success(`Passphrase stored at ${data.passphrase_stored_at}`);
+      // Which name it actually got. With no name given a free one is chosen
+      // rather than replacing what is there, so this is not always the obvious
+      // one -- and the Updates page will list it under exactly this.
+      if (data.image_name) toast.success(`Building ${data.image_name}`);
       await stream(data.id);
-    } catch (e) { toast.error(apiError(e)); }
+    } catch (e) {
+      // A name collision is refused rather than allowed to overwrite, and the
+      // server names a free alternative. Offer it instead of making the
+      // operator invent one.
+      const d = (e as any)?.response?.data?.detail;
+      if (d && typeof d === "object" && d.suggestion) {
+        toast.error(`${d.detail} Try "${d.suggestion}", or tick Replace to build over it.`);
+        setOpts((o) => ({ ...o, name: d.suggestion.replace(/\.img$/, "") }));
+        return;
+      }
+      toast.error(apiError(e));
+    }
   }
   // The imager is built for the architecture selected above, because it is a
   // kernel the target machine runs: an amd64 imager cannot netboot an arm64
@@ -191,6 +207,28 @@ export default function Build() {
                 each other, and left Root slot size alone in a half-empty row.
                 Hostname spans the row so the credentials sit together on theirs
                 and the two size fields share the next one. */}
+            {/* Naming an image is what lets two of the same kind coexist. The
+                default used to be distro-suite-arch and nothing else, so a
+                second Debian 13 amd64 build replaced the first -- taking with it
+                the image a deployed machine was built from, and the LUKS
+                passphrase filed under that name. Left blank, the server now
+                picks a free name rather than overwriting anything. */}
+            <div className="col-span-2">
+              <Label>Image name (optional)</Label>
+              <Input value={opts.name} onChange={(e) => set("name", e.target.value)}
+                     placeholder={`${opts.distro}-${opts.suite}-${opts.arch}-ab`} />
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <p className="text-xs text-zinc-500">
+                  Leave blank and a free name is chosen — an existing image is never
+                  built over by accident.
+                </p>
+                <label className="flex shrink-0 items-center gap-1.5 text-xs text-zinc-400">
+                  <input type="checkbox" checked={opts.replace}
+                         onChange={(e) => set("replace", e.target.checked)} />
+                  Replace if it exists
+                </label>
+              </div>
+            </div>
             <div className="col-span-2"><Label>Hostname</Label><Input value={opts.hostname} onChange={(e) => set("hostname", e.target.value)} /></div>
             <div><Label>Username</Label><Input value={opts.username} onChange={(e) => set("username", e.target.value)} /></div>
             <div><Label>Password</Label><Input type="password" value={opts.password} onChange={(e) => set("password", e.target.value)} placeholder="login password" /></div>

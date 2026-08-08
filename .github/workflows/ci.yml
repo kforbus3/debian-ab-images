@@ -135,6 +135,15 @@ jobs:
           # Nothing about that is visible until someone needs the recovery key.
           python tests/test_secretstore.py
 
+      - name: A build never replaces an existing image
+        working-directory: webui/backend
+        run: |
+          # The output name was distro-suite-arch alone, so a second Debian 13
+          # amd64 build replaced the first -- the image a deployed machine was
+          # made from, its sidecars, and the LUKS passphrase filed under that
+          # name, which is a recovery key for a machine in the field. Silently.
+          python tests/test_image_naming.py
+
       - name: SPA routing
         working-directory: webui/backend
         run: |
