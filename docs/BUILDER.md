@@ -34,6 +34,7 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--ssh-key-only` | off | Disable SSH password auth (requires a key) |
 | `--encrypt` | off | LUKS2-encrypt the root slots and overlay |
 | `--unlock METHOD` | `keyfile` | Auto-unlock: `passphrase` \| `keyfile` \| `tpm2` \| `tang` |
+| `--tpm2-pcrs LIST` | `7` | PCRs a `tpm2` binding is sealed to |
 | `--luks-passphrase P` | — | LUKS passphrase (setup + recovery); required with `--encrypt` |
 | `--luks-passphrase-file F` | — | Read it from a file (or `-` for stdin) instead — keeps it out of `ps` |
 | `--tang-url URL` | — | Tang server URL (required for `--unlock tang`) |
@@ -281,11 +282,29 @@ machine unlocks at boot with `--unlock`:
 The passphrase you pass is always enrolled as a **recovery** key.
 
 **How tpm2/tang stay unattended *and* keyless:** the image ships with a bootstrap
-keyfile in the initramfs so the very first boot unlocks on its own. A first-boot
-service (`luks-enroll`) then binds the volumes to the TPM (or Tang), rebuilds the
-initramfs, and **destroys the bootstrap keyfile** — so after first boot no key
-remains on disk. If enrollment fails (e.g. no TPM, Tang unreachable) it keeps the
-keyfile and retries next boot, so a machine never bricks.
+keyfile in the initramfs so the very first boot unlocks on its own. Enrollment
+then happens over the following two boots:
+
+1. `luks-enroll` binds every volume to the TPM (or Tang) with **clevis**, checks
+   that the binding really recovers the key, rebuilds the initramfs without the
+   keyfile in it, and checks *that* — the initramfs must contain the clevis
+   unlock hook, the TPM libraries, and no key material. The new initramfs is
+   copied into **both** slots. The bootstrap key is still there, untouched.
+2. The next boot unlocks through the TPM, because there is no longer a keyfile in
+   the initramfs that could do it instead. Having proved that, `luks-enroll-reap`
+   removes the bootstrap keyslot and deletes the keyfile — so from then on no key
+   remains on disk.
+
+If anything fails at any point, the bootstrap keyfile stays and the machine keeps
+booting unattended; enrollment retries on the next boot. The key is only ever
+destroyed *after* a boot has demonstrated the machine no longer needs it.
+
+> Both methods go through clevis, which is the only mechanism Debian's
+> initramfs-tools can call at unlock time. `systemd-cryptenroll` writes a valid
+> keyslot that this initrd cannot use — a `tpm2-device=auto` crypttab entry means
+> nothing outside a systemd initrd. Images built before this fix enrolled that
+> way and could not unlock; see the recovery note in
+> [SECURITY.md](SECURITY.md#disk-encryption).
 
 ```bash
 # TPM2 (recommended where available; UNLOCK defaults to tpm2)
