@@ -36,6 +36,25 @@ neither service is reachable from the host's other networks. Starting without
 | `DHCP_RANGE_START` / `_END` | dhcp | Lease range |
 | `DHCP_NETMASK` / `DHCP_ROUTER` / `DHCP_DNS` / `LEASE_TIME` | dhcp | Standalone DHCP options |
 | `PROXY_SUBNET` | proxy | Network address of the LAN, e.g. `192.168.1.0` |
+| `WEBUI_ADDR` | both | Where the web UI's API is, so machines being imaged can report progress into it. Default `127.0.0.1:8080`. See below |
+
+### Progress reporting (`WEBUI_ADDR`)
+
+The imager posts progress to `<image host>/api/imaging/report` — it is given no
+other address, since the iPXE scripts pass only `imager.url=`. That host is this
+server, so nginx forwards exactly `/api/imaging/report` and
+`/api/imaging/checkin` to the web UI and nothing else; the rest of the API is
+the admin surface and has no business on the imaging segment.
+
+`WEBUI_ADDR` defaults to `127.0.0.1:8080`, which is right whenever the web UI
+runs on this host. Set it if the UI is elsewhere. A hostname works if it
+resolves — if it does not, nginx would refuse to start and take PXE with it, so
+the entrypoint checks and falls back to the default with a note in the log.
+
+**Symptom if this is wrong:** machines image perfectly and never appear on the
+Imaging page. The imager prints a note on the console once per run when it
+cannot reach the URL; otherwise the failure is silent by design, because
+reporting must never hold up an imaging run.
 
 ### standalone DHCP vs proxyDHCP
 

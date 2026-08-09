@@ -37,7 +37,9 @@ through the Docker socket.
   progress reported by the imager itself. A machine that finishes drops off shortly
   after; one that stops reporting is marked stalled and then removed, so the page
   only ever shows current work. The Provisioning page's list is the narrower
-  question of who is on the network and still needs an image.
+  question of who is on the network and still needs an image. If machines show
+  `booting imager` there but never reach this page, the imager's reports are not
+  arriving — see `WEBUI_ADDR` in [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Fleet** — every machine this server has imaged, kept on disk and never expired.
   Machines report once when imaging finishes and again when they boot the image, so
   a machine that imaged and then failed to boot shows as **never-booted** rather

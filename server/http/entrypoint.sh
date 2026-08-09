@@ -27,13 +27,35 @@ case "${UNASSIGNED:-image}" in
     *)    FALLBACK="default.ipxe";;
 esac
 
-export SERVER_IP IMAGE_FILE ACTION FALLBACK RETRY_SECONDS
+# Where the web UI's API lives, for the two endpoints machines report into.
+# Both stacks normally run on the same host and this container uses host
+# networking, so the loopback address of the UI's published port is right almost
+# always. Point it elsewhere when the UI runs on another host.
+#
+WEBUI_ADDR="${WEBUI_ADDR:-127.0.0.1:8080}"
+
+export SERVER_IP IMAGE_FILE ACTION FALLBACK RETRY_SECONDS WEBUI_ADDR
 # boot.ipxe dispatches on MAC and falls back to whichever of the two applies.
 envsubst '${SERVER_IP} ${FALLBACK}'                    < /boot.ipxe.tmpl       > /srv/http/boot.ipxe
 envsubst '${SERVER_IP} ${IMAGE_FILE} ${ACTION}'        < /default.ipxe.tmpl    > /srv/http/default.ipxe
 envsubst '${RETRY_SECONDS}'                            < /unassigned.ipxe.tmpl > /srv/http/unassigned.ipxe
 # Bind the listener to the provisioning IP rather than every host interface.
-envsubst '${SERVER_IP}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
+envsubst '${SERVER_IP} ${WEBUI_ADDR}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
+
+# nginx resolves a proxy_pass name once, at config load, and refuses to start if
+# it cannot -- so a WEBUI_ADDR naming a host that does not resolve would take PXE
+# down with it, which is a far worse outcome than losing the progress display.
+# Ask nginx itself rather than guessing from the string: a hostname that does
+# resolve is perfectly fine and should keep working.
+if ! nginx -t >/dev/null 2>&1; then
+    echo "WEBUI_ADDR='$WEBUI_ADDR' produces an nginx config that will not load:"
+    nginx -t 2>&1 | sed 's/^/  /'
+    echo "Falling back to 127.0.0.1:8080. Imaging still works; progress reporting"
+    echo "will not reach the web UI unless it is listening there."
+    WEBUI_ADDR=127.0.0.1:8080
+    export WEBUI_ADDR
+    envsubst '${SERVER_IP} ${WEBUI_ADDR}' < /nginx.conf.tmpl > /etc/nginx/conf.d/default.conf
+fi
 
 # --- update bundles, reachable from where the fleet actually lives -----------
 #
