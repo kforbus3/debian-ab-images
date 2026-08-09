@@ -4,6 +4,42 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Health checks decide whether an update is kept.** Drop an executable in
+`/etc/ab/health.d/` (via `overlay.d`) and it runs before logins are permitted;
+if any check fails the slot is never marked good and the next boot rolls back to
+the previous release. With no checks installed nothing changes — booting far
+enough to permit logins is still the test, which is what it has always been.
+
+This is systemd's own boot-assessment shape: checks are ordered before
+`boot-complete.target`, and `ab-mark-good` `Requires=` that target. Checks run
+before `systemd-user-sessions.service` so adding them does not reopen the window
+that let a reboot switch slots, with a 60s timeout so a hung check cannot
+produce a machine nobody can log into. A failed check does not block login — the
+machine comes up so you can see why, it simply is not blessed.
+
+The first version of this was wired `WantedBy=boot-complete.target`, which is a
+`Wants=` — a failing check left the target `active`, the slot was blessed anyway
+and nothing rolled back. The mechanism was decorative, and only a real boot
+showed it (`health-check=failed`, `boot-complete=active`,
+`mark-good-result=success`, `B -> B -> B`). It is `RequiredBy=` now, and
+`test-slot-stability.sh` gained a `health-fail` mode that installs a failing
+check and asserts the machine rolls back (`B -> A -> A`).
+
+**Fixed: `test-luks-key-portability.sh` failed intermittently on unrelated
+changes.** `losetup -P` scans partitions the moment they appear — before `mkfs`
+writes a label — so blkid's cache could hold a label-less entry for the very
+device the test had just labelled. `blkid -t LABEL=BOOT` then found nothing,
+`ab-luks-key` correctly warned that it could not find the BOOT partition, and
+the test recorded two failures that looked like the product was broken when
+nothing about it had changed. It is the same trap `test-state-directives.sh`
+documents for `blkid -L overlay`.
+
+The cache is now dropped before each invocation, and the harness asserts up
+front that the label resolves to the device it just made — so a recurrence is
+reported as `HARNESS-FAIL` rather than as a product failure. `ab-luks-key` also
+gained a cache-bypassing `blkid -c /dev/null` retry, since a scan before a label
+is written is possible on a real machine too.
+
 **Fixed: machines being imaged never appeared on the Imaging page.** A machine
 would show `booting imager` on the Provisioning page, image perfectly, boot —
 and never show up on the Imaging page at all, with no error anywhere.

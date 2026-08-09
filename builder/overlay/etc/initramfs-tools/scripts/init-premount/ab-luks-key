@@ -49,6 +49,16 @@ chmod 0700 "$(dirname "$DEST")"
 # PARTLABEL= -- udev may not have settled this early.
 BOOTDEV="$(blkid -l -t LABEL=BOOT -o device 2>/dev/null)"
 [ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -l -t PARTLABEL=BOOT -o device 2>/dev/null)"
+# Cache-free retry. blkid answers from /run/blkid/blkid.tab when it exists, and
+# an entry written before a label was applied hides that label afterwards --
+# which is a real failure mode wherever something scanned the disk earlier in
+# the same boot. -c /dev/null forces a probe of the devices themselves. Only
+# reached when the cached lookups found nothing, so it costs a scan exactly when
+# the alternative is prompting for a passphrase nobody knew about.
+if [ -z "$BOOTDEV" ]; then
+    BOOTDEV="$(blkid -c /dev/null -t LABEL=BOOT -o device 2>/dev/null | head -1)"
+    [ -n "$BOOTDEV" ] || BOOTDEV="$(blkid -c /dev/null -t PARTLABEL=BOOT -o device 2>/dev/null | head -1)"
+fi
 
 if [ -z "$BOOTDEV" ]; then
     log_warning_msg "ab-luks-key: cannot find the BOOT partition;" \

@@ -46,7 +46,11 @@ MODE="${MODE:-poweroff}"
 #                    for updates must not quietly disable the fallback, so this
 #                    stages what an update stages (slot B unproven, ORDER=B A),
 #                    makes B unhealthy, and asserts the machine falls back to A.
-case "$MODE" in poweroff|hostname-reboot|early-reboot|rollback) ;; *) echo "HARNESS-FAIL: bad MODE"; exit 1;; esac
+# health-fail     -- a health check that fails must stop the slot being
+#                    blessed, so an update that boots but is not healthy still
+#                    rolls back. Same staging as rollback, but the slot is left
+#                    entirely functional and only the check says no.
+case "$MODE" in poweroff|hostname-reboot|early-reboot|rollback|health-fail) ;; *) echo "HARNESS-FAIL: bad MODE"; exit 1;; esac
 
 SRC="${SRC:-/output/marktest.img}"
 DISK="${DISK:-/output/slot-stability-${MODE}.img}"
@@ -146,6 +150,8 @@ REPORT=/var/lib/overlay/probe-$STAGE.txt
 echo "stage=$STAGE slot=$(sed -n 's/.*rauc.slot=\([AB]\).*/\1/p' /proc/cmdline)"
 echo "mark-good-status=$(systemctl is-active ab-mark-good.service 2>/dev/null)"
 echo "mark-good-result=$(systemctl show -p Result --value ab-mark-good.service 2>/dev/null)"
+echo "health-check=$(systemctl is-active ab-health-check.service 2>/dev/null)"
+echo "boot-complete=$(systemctl is-active boot-complete.target 2>/dev/null)"
 echo "grubenv=$(grub-editenv /boot/grub/grubenv list 2>&1 | tr '\n' ' ')"
 echo "boot-mounted=$(findmnt -no SOURCE /boot 2>/dev/null || echo NONE)"
 echo "boot-rw=$(findmnt -no OPTIONS /boot 2>/dev/null | cut -d, -f1)"
@@ -299,18 +305,30 @@ prime_rollback() {
     for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
         [ "$(blkid -o value -s LABEL "/dev/${BB}p$n" 2>/dev/null)" = rootfs-b ] || continue
         mount "/dev/${BB}p$n" /mnt/slot || fail "mount rootfs-b"
-        # Masked, not deleted: systemd reports it as masked in the probe report,
-        # so a run that failed for some other reason is distinguishable.
-        ln -sf /dev/null /mnt/slot/etc/systemd/system/ab-mark-good.service
+        if [ "$MODE" = health-fail ]; then
+            # Nothing masked and nothing broken: the slot boots perfectly and a
+            # health check says it is not fit to keep. That is the only thing
+            # standing between this update and being blessed.
+            mkdir -p /mnt/slot/etc/ab/health.d
+            printf '#!/bin/sh\necho "the application is not serving"\nexit 1\n' \
+                > /mnt/slot/etc/ab/health.d/99-fails.sh
+            chmod 0755 /mnt/slot/etc/ab/health.d/99-fails.sh
+            echo "  slot B: a failing health check installed; nothing else changed"
+        else
+            # Masked, not deleted: systemd reports it as masked in the probe
+            # report, so a run that failed for some other reason is
+            # distinguishable.
+            ln -sf /dev/null /mnt/slot/etc/systemd/system/ab-mark-good.service
+            echo "  slot B: ab-mark-good masked, so probation is never cleared"
+        fi
         sync; umount /mnt/slot
-        echo "  slot B: ab-mark-good masked, so probation is never cleared"
         break
     done
     detach
 }
 
 install_probe
-[ "$MODE" = rollback ] && prime_rollback
+case "$MODE" in rollback|health-fail) prime_rollback;; esac
 
 echo ""
 echo "=== grubenv as imaged ==="
@@ -324,7 +342,7 @@ S1=$(probe_slot 1)
 [ -n "$S1" ] || fail "the probe never ran on boot 1 (see $LOG)"
 ok "boot 1 came up on slot $S1"
 echo "  --- boot 1 report ---"; probe_report 1
-if [ "$MODE" = rollback ]; then
+if [ "$MODE" = rollback ] || [ "$MODE" = health-fail ]; then
     [ "$S1" = "B" ] && ok "boot 1 used the pending slot B, as ORDER says" \
                     || bad "boot 1 used slot $S1, expected the pending slot B"
 else
@@ -336,7 +354,7 @@ echo ""
 echo "=== grubenv after boot 1 ==="
 grubenv_dump
 T1=$(grubenv_get "${S1}_TRY")
-if [ "$MODE" = rollback ]; then
+if [ "$MODE" = rollback ] || [ "$MODE" = health-fail ]; then
     # The probation was armed and spent. If grub.cfg had not armed it, the
     # counter would still be 0 and the unhealthy slot would boot forever.
     [ "$T1" = "1" ] && ok "${S1}_TRY=1: the pending slot was put on probation" \
@@ -354,7 +372,7 @@ fi
 boot "second boot, unchanged machine"
 S2=$(probe_slot 2)
 [ -n "$S2" ] || fail "the probe never ran on boot 2 (see $LOG)"
-if [ "$MODE" = rollback ]; then
+if [ "$MODE" = rollback ] || [ "$MODE" = health-fail ]; then
     # The whole point of the fallback, and the thing arming-only-for-updates
     # must not break: an unhealthy update gets exactly one attempt.
     [ "$S2" = "A" ] && ok "boot 2 rolled back to slot A after the pending slot failed to mark good" \

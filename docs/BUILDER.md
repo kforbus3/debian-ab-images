@@ -275,6 +275,49 @@ ab-overlay: root is now an overlay (lower=slot A, upper=upper-A on the overlay p
 ab-overlay:   each slot has its own upper layer; nothing written here reaches the other slot
 ```
 
+## Health checks: what an update has to prove
+
+An A/B update gets one attempt. The slot it wrote is on probation until
+something says the boot was good; if nothing does, the next boot falls back to
+the slot that was working. By default "good" means the machine booted far enough
+to permit logins, which catches the failures rollback exists for — an unbootable
+kernel, a broken initramfs, a root that will not mount.
+
+That says nothing about whether your software works. Drop an executable in
+`/etc/ab/health.d/` and it does:
+
+```bash
+# overlay.d/etc/ab/health.d/10-app.sh   (chmod +x before building)
+#!/bin/sh
+systemctl is-active --quiet my-agent || { echo "my-agent is not running"; exit 1; }
+curl -fsS --max-time 5 http://localhost:8080/healthz >/dev/null || exit 1
+```
+
+Every executable in that directory runs in name order. All exit 0 and the slot
+is kept. Any one fails and the slot is never marked good, so **the next boot
+rolls back to the previous release** — the update is undone without anyone
+watching.
+
+Practicalities, all of them learned by watching a real boot:
+
+- **Checks run before logins are permitted.** That is deliberate: it is what
+  stops a bad update being blessed by someone logging in and rebooting before
+  the checks have had their say. It also means a check that hangs is a machine
+  nobody can log into, so the unit has a 60-second `TimeoutStartSec` and hitting
+  it counts as a failure.
+- **Keep them local and fast.** A check that waits on something across the
+  network turns a network problem into a rollback.
+- **A non-executable file counts as a failure**, not as absent. Silently
+  skipping a check someone believed they had installed is the one outcome worse
+  than not having it.
+- **A failed check does not block login.** The machine comes up so you can get
+  in and see why; it just is not blessed.
+- **No checks installed is a pass**, so an image that ships none behaves exactly
+  as it did before.
+
+On a running machine, `systemctl status ab-health-check` shows the verdict and
+`journalctl -u ab-health-check` shows each check's output.
+
 ### Changing the model later
 
 You cannot, by update. A machine records its model, and an image declaring a
