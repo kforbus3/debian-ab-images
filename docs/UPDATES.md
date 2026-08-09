@@ -259,6 +259,30 @@ a bundle has been rolled out or merely built.
 | `is not a RAUC bundle` | `ab-update` checked the first four bytes and they were not squashfs — wrong URL, not a bad bundle |
 | `Waiting for encrypted source device` after an update | the bundle came from an image built before v0.5.0, whose crypttab carries that build's LUKS UUIDs — see below |
 
+### A bundle that installs but is refused at boot
+
+One refusal does not come from `rauc install` at all. If the bundle's image
+declares a different **writable-state layout** — a different `--state-model`, or
+one of the pair built with and without `--slot-private-upper` — the install
+succeeds and the initramfs refuses it on the next boot instead, booting the slot
+untouched and logging:
+
+```
+ab-overlay: REFUSING: this image uses state layout 'overlay+per-slot-upper', the
+ab-overlay:   machine was imaged with 'overlay'. ...
+ab-overlay:   Changing the layout needs a re-image, not an update.
+```
+
+That is deliberate, and it is not recoverable by another bundle: everything the
+machine has written is on the overlay partition in the store the *old* layout
+used, and applying the new one would leave every file present but unreachable —
+which from inside is indistinguishable from a wipe. The machine keeps running the
+slot it was on. To change the layout, re-image.
+
+`make-bundle.sh` prints the layout a bundle carries (`state layout=…`) so the
+mismatch can be caught while building rather than by a fleet that will not take
+the update.
+
 ### Encrypted machines and update bundles
 
 An encrypted image addresses its LUKS volumes by **partition label**, not by LUKS

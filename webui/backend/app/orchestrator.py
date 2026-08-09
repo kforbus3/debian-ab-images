@@ -605,6 +605,11 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
     # to second-guess it beyond dropping obvious junk.
     if opts.get("state_model") and opts["state_model"] != "overlay":
         args += ["--state-model", opts["state_model"]]
+    # Each slot gets its own overlay upper layer rather than sharing one. Not a
+    # default, and not something an update can turn on or off — a machine
+    # records the layout it was imaged with and refuses a change at boot.
+    if opts.get("slot_private_upper"):
+        args += ["--slot-private-upper"]
     for field, flag in (
         ("persist_paths", "--persist"),
         ("slot_private_paths", "--slot-private"),

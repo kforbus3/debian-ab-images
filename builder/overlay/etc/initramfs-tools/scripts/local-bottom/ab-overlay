@@ -20,6 +20,16 @@
 # machines already in the field boot their own slot's initramfs and must not
 # change behaviour underneath themselves.
 #
+# One optional line changes where the overlay's upper layer lives:
+#
+#     upper per-slot
+#
+# which gives each slot its own upper (`upper-A`, `upper-B`) instead of the one
+# both share. A configuration change made while running A then cannot follow you
+# into B, so "boot the other slot" recovers from a bad edit and not only from a
+# bad image -- at the cost of the two slots no longer sharing anything the
+# overlay covers. See BUILDER.md#a-separate-upper-layer-per-slot.
+#
 # Runs in local-bottom, after the root slot is mounted at $rootmnt and before
 # the switch to it. Add ab.state=off (ab.overlay=off) to the kernel command line
 # to boot the slot untouched, which is the escape hatch if the writable state
@@ -116,6 +126,7 @@ mount -t ext4 "$OVL" /ab-rw 2>/dev/null || undo "overlay filesystem would not mo
 # so `overlay /` always lands before anything mounted inside it.
 CONF=/ab-lower/usr/lib/ab/state.conf
 MODEL=overlay
+UPPER_MODE=shared             # shared | per-slot; see "upper" below
 MOUNTS=/ab-conf-mounts        # "verb path [arg]" per line, in application order
 RESETS=/ab-conf-resets        # paths cleared from their store on a slot change
 KEEPS=/ab-conf-keeps          # paths held back from that clearing
@@ -128,6 +139,7 @@ if [ -r "$CONF" ]; then
         rest="${rest# }"
         case "$verb" in
             model)                    MODEL="$rest";;
+            upper)                    UPPER_MODE="$rest";;
             overlay|persist|slot-private|volatile)
                                       printf '%s %s\n' "$verb" "$rest" >> "$MOUNTS";;
             reset-on-update)          printf '%s\n' "$rest" >> "$RESETS";;
@@ -207,6 +219,55 @@ for arg in $(cat /proc/cmdline 2>/dev/null); do
     case "$arg" in rauc.slot=*) SLOT="${arg#rauc.slot=}";; esac
 done
 
+# --- where the overlay's upper layer lives -----------------------------------
+#
+# Shared by both slots by default: an update replaces the OS in the inactive
+# slot and reboots into it, and an upper layer tied to a slot would take /home
+# with it every time. The cost is that a bad edit follows you into the other
+# slot, so booting it is not by itself a way out of one.
+#
+# `upper per-slot` buys that way out. Each slot gets its own upper and its own
+# workdir, so nothing written while running A is visible from B -- including the
+# configuration change that stopped A from booting. Everything below is written
+# in terms of these two variables precisely so that this is the only place the
+# difference exists.
+UPPER_ROOT=/ab-rw/upper
+WORK_ROOT=/ab-rw/work
+case "$UPPER_MODE" in
+    shared) ;;
+    per-slot)
+        # No rauc.slot means no way to tell which upper is this boot's. Falling
+        # back to the shared one would hand the machine a layer it has never
+        # written to, which from inside is indistinguishable from having been
+        # wiped -- so refuse, the same way a model change is refused. grub.cfg
+        # always passes rauc.slot, so this is only reachable from a hand-typed
+        # command line, where a refusal is the useful answer.
+        if [ -z "$SLOT" ]; then
+            msg "REFUSING: this image gives each slot its own upper layer, and"
+            msg "  there is no rauc.slot= on the kernel command line to say which"
+            msg "  one this is. Add rauc.slot=A or rauc.slot=B, or boot with"
+            msg "  ab.state=off to get in and look around."
+            undo "no slot for a per-slot upper layer"
+        fi
+        UPPER_ROOT="/ab-rw/upper-$SLOT"
+        WORK_ROOT="/ab-rw/work-$SLOT"
+        ;;
+    *)
+        # An unknown value must not silently become "per-slot": that would move
+        # every existing machine's writes out from under it. Shared is both the
+        # historical behaviour and the recoverable one.
+        msg "state.conf: unknown 'upper $UPPER_MODE'; using the shared upper layer"
+        UPPER_MODE=shared
+        ;;
+esac
+
+# What the machine records as the layout it was imaged with, and what an image
+# delivered by an update is checked against. The upper mode is part of it: it
+# decides which directory every write has been landing in, so changing it has
+# exactly the same consequence as changing the model, and gets the same refusal.
+MODEL_ID="$MODEL"
+[ "$UPPER_MODE" = per-slot ] && MODEL_ID="$MODEL+per-slot-upper"
+
 # Sets STORE_PATH and STORE_VERB; returns 1 if nothing backs the path.
 # Globals rather than a printed value because the caller needs both, and both
 # are needed together: *where* a path is backed decides what clearing it means.
@@ -222,7 +283,7 @@ resolve_store() {              # resolve_store <absolute path>
         _len=${#_mp}
         [ "$_len" -gt "$_bestlen" ] || continue
         case "$_verb" in
-            overlay)      STORE_PATH="/ab-rw/upper$_p";;
+            overlay)      STORE_PATH="$UPPER_ROOT$_p";;
             persist)      STORE_PATH="/ab-rw/persist$_p";;
             slot-private) STORE_PATH="/ab-rw/slots/${SLOT:-unknown}$_p";;
             volatile)     STORE_PATH=""; STORE_VERB=volatile; _bestlen=$_len; continue;;
@@ -264,12 +325,19 @@ clear_from_store() {           # clear_from_store <absolute path>
 # would leave a machine that had been told "start clean" still running on its
 # old /var and /home, which is the opposite of what the recovery entry promises.
 #
+# The exception is the *other* slot's upper under `upper per-slot`. Only this
+# slot's is set aside: the whole reason to give the slots separate uppers is so
+# that the other one is a known-good state to fall back on, and a reset entry
+# that wiped it too would destroy exactly what it was reached for.
+#
 # If a previous snapshot is already there, refuse rather than overwrite it -- a
 # second reset would otherwise destroy the state you were trying to rescue. That
 # is safe to refuse because ab.state=off always boots the slot regardless.
 if [ "$RESET" = 1 ]; then
+    # "upper" or "upper-A" -- whichever this boot is actually writing to.
+    _upper_name="${UPPER_ROOT##*/}"
     _blocked=""
-    for s in upper persist slots; do
+    for s in "$_upper_name" persist slots; do
         [ -e "/ab-rw/$s.prev" ] && _blocked="$_blocked $s.prev"
     done
     if [ -n "$_blocked" ]; then
@@ -278,14 +346,16 @@ if [ "$RESET" = 1 ]; then
         msg "  first, or boot with ab.state=off to get in and clean up."
     else
         _moved=""
-        for s in upper persist slots; do
+        for s in "$_upper_name" persist slots; do
             [ -e "/ab-rw/$s" ] || continue
             mv "/ab-rw/$s" "/ab-rw/$s.prev" 2>/dev/null && _moved="$_moved $s"
         done
-        remove_path /ab-rw/work    || true
-        remove_path /ab-rw/work.d  || true
+        remove_path "$WORK_ROOT"    || true
+        remove_path "$WORK_ROOT.d"  || true
         if [ -n "$_moved" ]; then
             msg "set aside:$_moved (as *.prev under /var/lib/overlay); starting clean"
+            [ "$UPPER_MODE" = per-slot ] && \
+                msg "  the other slot's upper layer was left alone"
         else
             msg "nothing to set aside; continuing"
         fi
@@ -331,14 +401,27 @@ restore_keeps
 # Nothing here can safely migrate that: only a person knows which files matter.
 # So the mismatch is refused loudly and the slot is booted as-is, which is
 # recoverable, rather than applied, which looks like data loss.
+#
+# Switching the upper layer between shared and per-slot is the same fault in a
+# different variable -- every write the machine has made is in `upper` and the
+# new manifest would read `upper-A` -- so it is folded into the same identity
+# string and refused the same way. The message says which half changed, because
+# "overlay" and "overlay+per-slot-upper" differ by something an operator has to
+# be told to look for.
 PREV_MODEL=""
 [ -r /ab-rw/.model ] && PREV_MODEL="$(cat /ab-rw/.model 2>/dev/null)"
-if [ -n "$PREV_MODEL" ] && [ "$PREV_MODEL" != "$MODEL" ]; then
-    msg "REFUSING: this image uses state model '$MODEL', the machine was imaged"
-    msg "  with '$PREV_MODEL'. Its writable state is laid out for the old model"
-    msg "  and applying the new one would hide it. Changing models needs a"
-    msg "  re-image, not an update."
-    undo "state model mismatch"
+if [ -n "$PREV_MODEL" ] && [ "$PREV_MODEL" != "$MODEL_ID" ]; then
+    msg "REFUSING: this image uses state layout '$MODEL_ID', the machine was"
+    msg "  imaged with '$PREV_MODEL'. Its writable state is laid out for the old"
+    msg "  one and applying the new one would hide it."
+    case "$PREV_MODEL" in
+        "$MODEL"|"$MODEL+per-slot-upper")
+            msg "  Only the upper layer differs: one of these images gives each slot"
+            msg "  its own and the other shares one. Everything the machine wrote is"
+            msg "  still under /var/lib/overlay, in the store the old layout used.";;
+    esac
+    msg "  Changing the layout needs a re-image, not an update."
+    undo "state layout mismatch"
 fi
 
 # --- reconcile the stores with the slot being booted -------------------------
@@ -426,7 +509,7 @@ fi
 apply_overlay() {              # apply_overlay <path>
     _p="$1"
     if [ "$_p" = "/" ]; then
-        _low=/ab-lower; _up=/ab-rw/upper; _wrk=/ab-rw/work; _tgt="$rootmnt"
+        _low=/ab-lower; _up="$UPPER_ROOT"; _wrk="$WORK_ROOT"; _tgt="$rootmnt"
     else
         # Each overlay needs its own workdir: two mounts cannot share one, and
         # nesting them under the root overlay's workdir would put them somewhere
@@ -436,8 +519,8 @@ apply_overlay() {              # apply_overlay <path>
             _slug="${_slug}${_rest%%/*}_"
             case "$_rest" in */*) _rest="${_rest#*/}";; *) _rest="";; esac
         done
-        _low="/ab-lower$_p"; _up="/ab-rw/upper$_p"
-        _wrk="/ab-rw/work.d/$_slug"; _tgt="$rootmnt$_p"
+        _low="/ab-lower$_p"; _up="$UPPER_ROOT$_p"
+        _wrk="$WORK_ROOT.d/$_slug"; _tgt="$rootmnt$_p"
     fi
     [ -d "$_low" ] || { msg "  overlay $_p: not present in the image; skipped"; return 1; }
     mkdir -p "$_up" "$_wrk" 2>/dev/null || return 1
@@ -509,7 +592,7 @@ while read -r verb mp arg; do
     esac
 done < "$MOUNTS"
 
-printf '%s\n' "$MODEL" > /ab-rw/.model 2>/dev/null || true
+printf '%s\n' "$MODEL_ID" > /ab-rw/.model 2>/dev/null || true
 
 # The overlay partition stays reachable at /var/lib/overlay, where fstab and
 # everything else expect it -- and where upper.prev has to be readable after a
@@ -524,8 +607,10 @@ mkdir -p "$rootmnt/var/lib/overlay" 2>/dev/null || true
 bind_mount /ab-rw "$rootmnt/var/lib/overlay" || true
 
 if [ "$ROOT_OVERLAY" = 1 ]; then
-    msg "root is now an overlay (lower=slot ${SLOT:-?}, upper=overlay partition)"
+    msg "root is now an overlay (lower=slot ${SLOT:-?}, upper=${UPPER_ROOT#/ab-rw/} on the overlay partition)"
 else
     msg "model ${MODEL}: slot ${SLOT:-?} with ${APPLIED} writable path(s) from the overlay partition"
 fi
+[ "$UPPER_MODE" = per-slot ] && \
+    msg "  each slot has its own upper layer; nothing written here reaches the other slot"
 exit 0

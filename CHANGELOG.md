@@ -2,6 +2,32 @@
 
 Notable changes per release. Dates are the tag date.
 
+## Unreleased
+
+**`--slot-private-upper`: each slot can have its own overlay upper layer.** A/B
+protected a machine from a bad image but not from a bad change. Both slots share
+one upper layer, so a broken `/etc/fstab` or a bad `systemd-networkd` file stops
+slot A booting *and* slot B, which reads the same layer — and "boot the other
+slot" is the first thing anyone tries.
+
+Built with `--slot-private-upper`, the overlay partition carries `upper-A` and
+`upper-B` instead of one `upper`. Nothing written while running A is visible from
+B, so the other slot really is a fallback. Not the default: the slots then share
+nothing the overlay covers, so pair it with `--persist /home` for what should
+survive the crossing. Machine identity (machine-id, SSH host keys) lives outside
+the upper layer and stays shared either way.
+
+Like the state model, it cannot be turned on or off by an update — the machine
+records `overlay+per-slot-upper` in `/var/lib/overlay/.model` and refuses an
+image declaring the other layout, because every write it has made is in the store
+the old one used. The recovery *reset writable state* entry sets aside only the
+booted slot's layer, and `ab-overlay-diff` reads that slot's layer and stops
+claiming the files it lists shadow the image on both slots.
+
+Available as `SLOT_PRIVATE_UPPER=1` to `make image` and as a checkbox under
+**Writable state** in the web UI. See
+[BUILDER.md](docs/BUILDER.md#a-separate-upper-layer-per-slot).
+
 ## v0.5.1 — 2026-08-08
 
 **Two images of the same kind can coexist.** The output name was

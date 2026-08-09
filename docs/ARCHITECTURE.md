@@ -56,6 +56,21 @@ them:
 | `slot-private PATH` | bind | `slots/<A\|B>/PATH` | no |
 | `volatile PATH [SIZE]` | tmpfs | — | no, and not across reboots |
 
+One manifest-wide line changes the first row:
+
+| line | effect |
+| --- | --- |
+| `upper per-slot` | every `overlay` directive is backed by `upper-<A\|B>/PATH` instead, so **no** overlaid path is shared |
+
+That is `--slot-private-upper`. It exists because A/B otherwise protects a
+machine from a bad image but not from a bad change: a shared upper layer means
+an edit that stops slot A booting is read by slot B too, so booting the other
+slot is no help. Separating the uppers makes the other slot a genuine fallback,
+at the cost of the two slots sharing nothing the overlay covers — which is why
+it is opt-in and why `persist` is the documented way to keep `/home` shared
+anyway. See
+[BUILDER.md](BUILDER.md#a-separate-upper-layer-per-slot).
+
 `--state-model` picks the starting manifest; the per-path flags append to it.
 See [BUILDER.md](BUILDER.md#writable-state) for what each model contains and
 when to choose it.
@@ -66,11 +81,13 @@ Two rules the engine enforces, both learned the hard way:
   deleting the upper copy uncovers the image's. Under a bind there is nothing
   underneath, so the same delete would destroy the file rather than revert it —
   bind stores are re-seeded from the image after clearing.
-- **A model change cannot ride an update.** The machine records its model in
+- **A layout change cannot ride an update.** The machine records its model in
   `/var/lib/overlay/.model`. An image declaring a different one is refused at
   boot and the slot is booted untouched, because applying it would leave every
   existing file on the partition but in the wrong store — indistinguishable,
-  from inside, from having been wiped. Changing models means re-imaging.
+  from inside, from having been wiped. Changing models means re-imaging. The
+  upper mode is part of that recorded identity (`overlay+per-slot-upper`) for
+  exactly the same reason: it decides which directory every write lands in.
 
 ## 2. Imager (`imager/`)
 

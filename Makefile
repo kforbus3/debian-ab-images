@@ -22,6 +22,11 @@ PACKAGES ?=
 # survives an update. The four path lists are space-separated and work with any
 # model — see docs/BUILDER.md#writable-state.
 STATE_MODEL ?=
+# SLOT_PRIVATE_UPPER=1 gives each slot its own overlay upper layer instead of
+# one shared by both, so a config change that stops slot A booting cannot follow
+# you into slot B. The slots then share nothing the overlay covers — pair it
+# with PERSIST for what should stay shared. It cannot be changed by an update.
+SLOT_PRIVATE_UPPER ?=
 PERSIST ?=
 SLOT_PRIVATE ?=
 VOLATILE ?=
@@ -46,6 +51,7 @@ image: ## Build the A/B disk image into ./output (SUITE=, PACKAGES=, ENCRYPT=1, 
 	  --image-size $(IMAGE_SIZE) --root-size $(ROOT_SIZE) --compress $(COMPRESS) \
 	  $(if $(PACKAGES),--packages "$(PACKAGES)") \
 	  $(if $(STATE_MODEL),--state-model $(STATE_MODEL)) \
+	  $(if $(SLOT_PRIVATE_UPPER),--slot-private-upper) \
 	  $(foreach p,$(PERSIST),--persist $(p)) \
 	  $(foreach p,$(SLOT_PRIVATE),--slot-private $(p)) \
 	  $(foreach p,$(VOLATILE),--volatile $(p)) \
