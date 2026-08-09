@@ -4,6 +4,25 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Bundles can be deleted from the web UI.** There was no way to remove one short
+of reaching into `output/bundles/` on the server, so the list only ever grew —
+at roughly half a gigabyte per bundle.
+
+The delete is not just an `rm`, because `bundles/latest` exists: `ab-update` with
+no arguments fetches that pointer and installs whatever it names, and directory
+listing is off on the HTTP server, so it is the only way an unattended machine
+finds a bundle at all. Deleting the file it named would have broken every
+unattended machine at once, reported as a download failure or `is not a RAUC
+bundle` rather than as something missing on the server. Deleting now moves the
+pointer to the newest bundle left, or removes it when the last one goes.
+
+The Updates page marks which row is **latest** and how many machines report each
+version, so both consequences are visible before the confirm. Deleting a version
+the fleet is running is safe — the update is on their disks and rollback uses the
+other slot — but it does prevent installing that version anywhere else, which the
+confirm says. Deletion is refused while a bundle build is running, since that
+build rewrites the same pointer.
+
 **`--slot-private-upper`: each slot can have its own overlay upper layer.** A/B
 protected a machine from a bad image but not from a bad change. Both slots share
 one upper layer, so a broken `/etc/fstab` or a bad `systemd-networkd` file stops

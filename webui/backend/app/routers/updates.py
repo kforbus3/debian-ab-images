@@ -77,3 +77,27 @@ async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
         env["LUKS_PASS"] = passphrase
     job = await jobs.start(type="bundle", label=label, cmd=cmd, now=orch.now(), env=env)
     return job.public()
+
+
+@router.delete("/bundles/{name}")
+async def delete_bundle(name: str, _: str = Depends(require_auth)):
+    """Remove a bundle and its sidecars.
+
+    A bundle a machine has already installed is not needed by that machine --
+    the update is on its disk, and rollback uses the other slot, not the bundle
+    -- so this is safe to do while the fleet runs that version. What it does
+    take away is the ability to install that version anywhere else, which the
+    UI says before asking.
+
+    Not allowed while a bundle build is running: that build ends by rewriting
+    the `latest` pointer, and a deletion repairing the same pointer at the same
+    moment is a race whose loser is every unattended machine in the fleet.
+    """
+    if jobs.running(type="bundle"):
+        raise HTTPException(409, "A bundle build is running; wait for it to finish")
+    try:
+        return await run_in_threadpool(orch.delete_bundle, name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Bundle not found")
+    except ValueError:
+        raise HTTPException(400, "Invalid name")
