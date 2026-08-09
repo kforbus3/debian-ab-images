@@ -221,6 +221,15 @@ if [ "$rc" -ne 0 ]; then
     exit "$rc"
 fi
 
+# Belt and braces. RAUC's post-install handler has already done this, and it is
+# the one that also covers `rauc install` run by hand -- but a handler that did
+# not run leaves the new slot booting with no fallback at all, and that is not
+# something to discover by needing it. Setting it twice costs one grubenv write
+# and is idempotent.
+if [ -x /usr/local/sbin/ab-slot-pending.sh ]; then
+    /usr/local/sbin/ab-slot-pending.sh || true
+fi
+
 echo ""
 echo "Installed. Reboot to switch slots:  systemctl reboot"
 echo "If the new slot fails to boot, GRUB falls back to this one automatically."

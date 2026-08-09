@@ -4,6 +4,32 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**The A/B fallback is now armed for updates, not for every boot.** A slot carries
+`<SLOT>_PROVEN` in grubenv; GRUB boots a proven slot outright and only puts an
+**unproven** one on probation. `ab-slot-pending.sh` sets `_PROVEN=0` on the slot
+an update has just written, and `ab-mark-good` sets it back once that slot boots.
+
+Previously the counter was armed on *every* boot, so every boot for the life of
+the machine had to be blessed before the next reboot, and any failure to do so
+switched slots. That is the mechanism behind the bug below; this removes it
+rather than narrowing it. It is also what Android
+(`successful`/`tries_remaining`), ChromeOS (`cgpt successful`/`tries`) and
+systemd-boot (`entry+N-M.conf`) do — RAUC's reference GRUB integration, which
+this project followed, arms every boot. Between updates nothing writes to `/boot`
+at all now.
+
+`ab-slot-pending.sh` is wired as RAUC's `[handlers] post-install`, not into
+`ab-update`, so `rauc install <bundle>` typed by hand — which `make-bundle.sh`
+prints and the web UI shows — gets the same protection. `ab-update` calls it
+again as belt and braces, since a handler that did not run means an update with
+no rollback.
+
+The risk in this change is the inverse of the bug: arm too little and rollback
+quietly disappears, discoverable only when needed. `test-slot-stability.sh`
+gained a `rollback` mode that stages what an update stages, makes the new slot
+fail to mark good, and asserts the machine falls back (`B -> A -> A`). Both ends
+run nightly.
+
 **Fixed: a machine could switch slots by itself after a perfectly good boot.**
 Image a machine, log in, change something, reboot — and it comes up on the other
 slot with none of your changes. It reads as the machine reverting itself. The

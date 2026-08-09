@@ -984,6 +984,7 @@ chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-en
          "$MNT/usr/local/sbin/ab-mark-good.sh" "$MNT/usr/local/sbin/machine-identity.sh" \
          "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
          "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh" \
+         "$MNT/usr/local/sbin/ab-slot-pending.sh" \
          "$MNT/usr/local/sbin/ab-kernel-hook.sh"
 # The others are only ever run by systemd; this one is run by a person, so it
 # gets a name without the extension and a place on the default PATH.
@@ -1230,8 +1231,13 @@ chroot "$MNT" grub-editenv /boot/grub/grubenv create
 # slot as "boot status: bad" and refuses to mark one primary -- so an update
 # installs and then cannot be activated. grub.cfg honours them too, so a slot
 # explicitly marked bad is skipped rather than booted into a known failure.
+# _PROVEN=1 on both: the two slots are byte-identical copies of this build, so
+# putting the first boot on probation could only ever fall back to the same
+# software that just failed. Probation is armed by ab-slot-pending.sh when an
+# update actually changes a slot, which is the only time a fallback means
+# anything.
 chroot "$MNT" grub-editenv /boot/grub/grubenv set ORDER="A B" \
-    A_TRY=0 B_TRY=0 A_OK=1 B_OK=1
+    A_TRY=0 B_TRY=0 A_OK=1 B_OK=1 A_PROVEN=1 B_PROVEN=1
 
 step "Syncing root slot A -> slot B"
 umount "$MNT/dev/pts" "$MNT/dev" "$MNT/proc" "$MNT/sys"
