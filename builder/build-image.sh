@@ -37,6 +37,10 @@ SSH_PUBKEY="${SSH_PUBKEY:-}"
 # single overlay over the A/B slot, shared by both slots, and the paths the
 # distribution owns are cleared from it whenever the slot changes.
 STATE_MODEL="${STATE_MODEL:-overlay}"
+# Whether the two slots share the overlay's upper layer. Shared is the default
+# and the historical behaviour; per-slot gives each slot its own, so a change
+# made in one cannot stop the other from booting. See --slot-private-upper.
+UPPER_MODE="${UPPER_MODE:-shared}"
 MOUNT_DIRECTIVES="overlay /"
 EXTRA_MOUNTS=""                          # from --persist/--slot-private/--volatile
 # Cleared from the writable state on a slot change. Everything the distribution
@@ -104,6 +108,16 @@ Usage: $0 [options]
                           overlay   whole root overlaid, shared by both slots
                           stateful  root read-only; /home /var /usr/local persist
                           appliance root read-only; only /data survives an update
+  --slot-private-upper    Give each slot its OWN overlay upper layer instead of
+                          one shared by both. A config change applied while
+                          running A then cannot stop B from booting, so the
+                          other slot is a real fallback and not just an older
+                          OS. The cost is that the slots share nothing the
+                          overlay covers -- including /home and /etc -- so pair
+                          it with --persist for what should stay shared.
+                          Not the default, and it cannot be turned on or off by
+                          an update: the machine records which layout it was
+                          imaged with and refuses a change at boot.
   --overlay-min MiB       Overlay partition size as built. It expands to fill
                           the disk on first boot, so this only has to hold what
                           the manifest seeds before that happens (default: 256,
@@ -141,6 +155,7 @@ while [[ $# -gt 0 ]]; do
         --run-script) RUN_SCRIPT="$2"; shift 2;;
         --own-path) OWN_PATHS="$OWN_PATHS $2"; shift 2;;
         --state-model)     STATE_MODEL="$2"; shift 2;;
+        --slot-private-upper) UPPER_MODE=per-slot; shift;;
         --overlay-min)     OVERLAY_MIN="$2"; shift 2;;
         --persist)         EXTRA_MOUNTS="$EXTRA_MOUNTS
 persist $2"; shift 2;;
@@ -292,6 +307,15 @@ for _p in $RESET_PATHS $KEEP_PATHS; do
         *) die "--reset-on-update/--keep-path: path must be absolute (got '$_p')";;
     esac
 done
+
+# --slot-private-upper only means anything if something is overlaid. Every model
+# here overlays at least one path, so this is a guard against a future one that
+# does not -- where the flag would otherwise be accepted, do nothing, and leave
+# the operator believing the slots were separated when they were not.
+if [ "$UPPER_MODE" = per-slot ] && [ -z "$_ovl" ]; then
+    die "--slot-private-upper: state model '$STATE_MODEL' overlays nothing, so there
+    is no upper layer to give each slot. Use --slot-private for individual paths."
+fi
 
 # How big the overlay partition has to be *as built*, before the machine ever
 # runs. It normally ships at its minimum and first-boot-expand grows it to fill
@@ -569,7 +593,17 @@ mount -t sysfs sys "$MNT/sys"
 # upper and work are the overlay root's two layers. There is no third
 # directory: a "persistent" one was created here and never used by anything,
 # which read as a supported place to put data that nothing would have kept.
-mkdir -p "$MNT/var/lib/overlay/upper" "$MNT/var/lib/overlay/work"
+#
+# With --slot-private-upper there is one pair per slot instead of one pair, and
+# both are created here rather than left to the initramfs: an empty upper-B on a
+# freshly imaged disk is what makes "boot the other slot" a clean state rather
+# than a directory the engine has to invent on a machine that may be in trouble.
+if [ "$UPPER_MODE" = per-slot ]; then
+    mkdir -p "$MNT/var/lib/overlay/upper-A" "$MNT/var/lib/overlay/work-A" \
+             "$MNT/var/lib/overlay/upper-B" "$MNT/var/lib/overlay/work-B"
+else
+    mkdir -p "$MNT/var/lib/overlay/upper" "$MNT/var/lib/overlay/work"
+fi
 
 step "Writing base configuration"
 echo "$HOSTNAME_" > "$MNT/etc/hostname"
@@ -861,7 +895,12 @@ fi
 # order and does not sort -- it has busybox and a bad day is a machine that does
 # not boot, whereas this has coreutils and can simply get the order right.
 STATE_CONF="$MNT/usr/lib/ab/state.conf"
-step "Writing the state manifest ($STATE_MODEL)"
+step "Writing the state manifest ($STATE_MODEL, upper layer $UPPER_MODE)"
+if [ "$UPPER_MODE" = per-slot ]; then
+    log "  Each slot gets its own upper layer, so a change made in one cannot"
+    log "  stop the other from booting -- and the two share nothing the overlay"
+    log "  covers. Use --persist for what should stay shared (e.g. /home)."
+fi
 
 # Every directive needs its mountpoint to exist in the image.
 #
@@ -885,6 +924,14 @@ EOF
     echo "# Generated by build-image.sh -- how this image lays out writable state."
     echo "# Applied by /etc/initramfs-tools/scripts/local-bottom/ab-overlay at boot."
     echo "model $STATE_MODEL"
+    # Emitted only when it is not the default, so the manifest on an ordinary
+    # image reads exactly as it always has -- and so the line's presence is
+    # itself the answer to "is this one of the per-slot-upper images?".
+    if [ "$UPPER_MODE" = per-slot ]; then
+        echo "# Each slot has its own overlay upper layer (upper-A / upper-B):"
+        echo "# nothing written while running one slot is visible from the other."
+        echo "upper per-slot"
+    fi
     echo ""
     printf '%s\n' "$MOUNT_DIRECTIVES" | grep -v '^$' | \
         awk '{ n = gsub("/", "/", $2); print n, $0 }' | sort -k1,1n -k3,3 | cut -d' ' -f2-
@@ -1224,6 +1271,8 @@ cat > "${OUT}.json" <<EOF
   "image_size_gib": $(awk "BEGIN{printf \"%.2f\", $TOTAL_MIB/1024}"),
   "image_size_mib": $TOTAL_MIB,
   "root_size_mib": $ROOT_SIZE,
+  "state_model": "$STATE_MODEL",
+  "slot_private_upper": $([ "$UPPER_MODE" = per-slot ] && echo true || echo false),
   "encrypted": $ENCRYPT,
   "update_keyring_sha256": "$KEYRING_FP",
   "unlock": "$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo none)",

@@ -56,7 +56,9 @@ GPT:
   change you make in one slot is still there in the other — when that is the
   problem, the GRUB menu has **Recovery** entries to reset it or bypass it, and
   `ab-overlay-diff` on the machine shows what changed. See
-  [docs/RECOVERY.md](docs/RECOVERY.md).
+  [docs/RECOVERY.md](docs/RECOVERY.md). Or build with `--slot-private-upper` and
+  each slot gets its own upper layer, so a change that stops slot A booting
+  cannot follow you into slot B.
 - **…but that is a default, not the design.** The image ships a manifest
   (`/usr/lib/ab/state.conf`) saying which paths are writable and which of them
   the two slots share, and the initramfs applies it. `--slot-private

@@ -16,14 +16,22 @@ The root filesystem is an overlay:
   upper      /var/lib/overlay/upper — every write since the machine was imaged
 ```
 
-The upper layer is **shared by both slots**. That is deliberate: an A/B update
-replaces the OS in the inactive slot and reboots into it, and if the upper layer
-were tied to a slot, every update would take `/home` with it.
+The upper layer is **shared by both slots** by default. That is deliberate: an
+A/B update replaces the OS in the inactive slot and reboots into it, and if the
+upper layer were tied to a slot, every update would take `/home` with it.
 
 The cost is that a change made while running slot A is still there in slot B.
 So the usual instinct — "something is broken, boot the other slot" — does not
 help on its own if the problem is a file you changed rather than a file the
 image shipped. These recovery entries are what makes that work again.
+
+> **Unless this image was built with `--slot-private-upper`.** Then each slot has
+> its own upper layer (`/var/lib/overlay/upper-A` and `upper-B`), nothing written
+> in one slot reaches the other, and booting the other slot *is* the way out of a
+> bad change — no recovery entry needed. Check with
+> `grep upper /usr/lib/ab/state.conf`; `upper per-slot` means yes. Everything
+> below still applies, with `upper` read as `upper-<your slot>`, and with one
+> difference called out under *reset writable state*.
 
 On a slot change the initramfs does clear the paths the OS owns
 (`/usr`, `/bin`, `/sbin`, `/lib*`, `/boot`, dpkg and apt state), so an update
@@ -67,6 +75,12 @@ alongside itself: `upper` → `upper.prev`, `persist` → `persist.prev`, `slots
 `slots.prev`. All of them, not just the overlay's upper layer — a machine told
 to start clean that came back up on its old `/var` and `/home` would be the
 opposite of what the entry promises.
+
+On a `--slot-private-upper` image it renames **only the booted slot's** layer
+(`upper-A` → `upper-A.prev` from the Slot A entry). The other slot's is left
+exactly as it is: the whole reason to separate them is so that the other slot is
+a known-good state to fall back on, and wiping it here would destroy the thing
+you reached for this entry to protect.
 
 - It is a rename on the same filesystem: instant, and it copies nothing, so it
   needs no free space.

@@ -77,9 +77,23 @@ mount "/dev/${BB}p$1" /mnt/slot || fail "mount slot"
 CONF=/mnt/slot/usr/lib/ab/state.conf
 [ -r "$CONF" ] || fail "the image has no /usr/lib/ab/state.conf"
 MODEL=$(awk '$1=="model"{print $2}' "$CONF")
-echo "=== manifest (model: ${MODEL:-none}) ==="
+# `upper per-slot` inverts what "shared" means for every overlay directive, so
+# it has to be read here rather than assumed. Without it this harness reports a
+# per-slot image's correct behaviour as data loss, which is precisely the mistake
+# it already made once over appliance's reset-on-update /var.
+UPPER_MODE=$(awk '$1=="upper"{print $2; exit}' "$CONF")
+[ -n "$UPPER_MODE" ] || UPPER_MODE=shared
+# What the machine stamps into /var/lib/overlay/.model. The upper mode is part of
+# that identity because it decides which directory every write lands in.
+MODEL_ID="$MODEL"
+[ "$UPPER_MODE" = per-slot ] && MODEL_ID="$MODEL+per-slot-upper"
+echo "=== manifest (model: ${MODEL:-none}, upper: $UPPER_MODE) ==="
 grep -vE '^\s*(#|$)' "$CONF" | sed 's/^/  /'
 MOUNTS=$(awk '$1=="overlay"||$1=="persist"||$1=="slot-private"||$1=="volatile"{print $1" "$2}' "$CONF")
+# Is the root itself overlaid? If so the interesting question -- does a change
+# made in one slot follow you into the other -- is about /, which the per-path
+# probe below deliberately skips. It gets its own marker instead.
+ROOT_OVERLAY=$(awk '$1=="overlay" && $2=="/"{print 1; exit}' "$CONF")
 # reset-on-update changes what "shared between slots" means for a path. The
 # appliance model persists /var and then resets it on every slot change, and a
 # test that did not read this reported that correct behaviour as data loss.
@@ -106,6 +120,19 @@ is_reset() {                   # is_reset <path> -- does a reset directive cover
     echo 'echo "root-source: $(findmnt -no SOURCE / 2>/dev/null)"'
     echo 'echo "root-rw: $(findmnt -no OPTIONS / 2>/dev/null | cut -d, -f1)"'
     echo 'echo "model-recorded: $(cat /var/lib/overlay/.model 2>/dev/null)"'
+    echo 'echo "upper-dirs: $(ls -d /var/lib/overlay/upper* 2>/dev/null | tr "\n" " ")"'
+    # A file written into the root overlay on boot 1 and read back on boot 2,
+    # which is the whole question `upper per-slot` answers: with a shared upper
+    # the second slot sees slot A's mark, with a per-slot upper it sees nothing.
+    # /etc rather than / itself -- a stray file in / would be odd on a machine
+    # this test leaves behind for someone to poke at.
+    if [ -n "$ROOT_OVERLAY" ]; then
+        cat <<'ROOTPROBE'
+echo "seen-root $([ -f /etc/.ab-probe-root ] && cat /etc/.ab-probe-root || echo none)"
+echo "$(sed -n 's/.*rauc.slot=\([AB]\).*/\1/p' /proc/cmdline)" > /etc/.ab-probe-root 2>/dev/null \
+  && echo "write-root ok" || echo "write-root FAILED"
+ROOTPROBE
+    fi
     printf '%s\n' "$MOUNTS" | while read -r verb mp; do
         [ -n "$mp" ] || continue
         [ "$mp" = "/" ] && continue
@@ -210,9 +237,34 @@ case "$MODEL" in
         printf '%s\n' "$FIRST" | grep -q "root-rw: ro" \
             && ok "root is mounted read-only" || bad "root is not read-only";;
 esac
-printf '%s\n' "$FIRST" | grep -q "model-recorded: $MODEL" \
-    && ok "the machine recorded model '$MODEL'" \
-    || bad "the machine did not record model '$MODEL'"
+printf '%s\n' "$FIRST" | grep -q "model-recorded: $MODEL_ID" \
+    && ok "the machine recorded layout '$MODEL_ID'" \
+    || bad "the machine did not record layout '$MODEL_ID'"
+
+# --- the root overlay across a slot change ------------------------------------
+#
+# The property the option exists for, asserted on a real boot rather than in the
+# container harness: a file written while running one slot either does or does
+# not exist when the other comes up, and which of those is correct is decided by
+# one line in the manifest.
+if [ -n "$ROOT_OVERLAY" ]; then
+    printf '%s\n' "$FIRST" | grep -q "write-root ok" \
+        && ok "the root overlay is writable" || bad "the root overlay is not writable"
+    sawroot=$(printf '%s\n' "$SECOND" | sed -n 's/^seen-root //p' | tr -d '\r')
+    if [ "$UPPER_MODE" = per-slot ]; then
+        [ "$sawroot" = "none" ] \
+            && ok "slot $S2 did not inherit slot $S1's root writes (per-slot upper)" \
+            || bad "slot $S2 saw slot $S1's root write '$sawroot'; the uppers are not separate"
+        printf '%s\n' "$SECOND" | grep -q "upper-dirs:.*upper-A" && \
+        printf '%s\n' "$SECOND" | grep -q "upper-dirs:.*upper-B" \
+            && ok "both per-slot upper layers exist on the partition" \
+            || bad "the partition does not have an upper-A and an upper-B"
+    else
+        [ "$sawroot" = "$S1" ] \
+            && ok "slot $S2 inherited slot $S1's root writes (shared upper)" \
+            || bad "slot $S2 lost slot $S1's root write (saw '$sawroot')"
+    fi
+fi
 
 printf '%s\n' "$MOUNTS" | while read -r verb mp; do
     [ -n "$mp" ] && [ "$mp" != "/" ] || continue
@@ -225,6 +277,14 @@ printf '%s\n' "$MOUNTS" | while read -r verb mp; do
                 [ "$saw" = "none" ] \
                     && echo "    ok    $mp reverted to the image on the slot change (reset-on-update)" \
                     || echo "    FAIL  $mp is reset-on-update but kept $S1's data (saw '$saw')"
+            elif [ "$verb" = overlay ] && [ "$UPPER_MODE" = per-slot ]; then
+                # Not data loss: this image gives each slot its own upper, so an
+                # overlaid path is private by construction. persist is unaffected
+                # -- it is a bind outside the overlay -- which is exactly why it
+                # is the recommended way to share something anyway.
+                [ "$saw" = "none" ] \
+                    && echo "    ok    $mp is private to each slot (per-slot upper)" \
+                    || echo "    FAIL  $mp leaked slot $S1's data into $S2 (saw '$saw')"
             else
                 [ "$saw" = "$S1" ] && echo "    ok    $mp carried $S1's data into $S2 (shared)" \
                                    || echo "    FAIL  $mp lost its data across the slot change (saw '$saw')"

@@ -195,13 +195,94 @@ The build validates the result and refuses rather than shipping a manifest that
 would only be found wrong at a boot prompt: absolute paths, no duplicates across
 directives (including against the model's own), no nested overlays.
 
+### A separate upper layer per slot
+
+```bash
+./builder/run.sh --slot-private-upper
+```
+
+**The problem it solves.** By default both slots share one overlay upper layer,
+so everything the machine has written is there whichever slot boots. That is
+what stops an update from taking `/home` with it — and it means a change *you*
+made is also there in both. Edit `/etc/fstab` badly, or ship a broken
+`/etc/systemd/network` file, and slot A stops booting; boot slot B and it stops
+booting too, because it reads the same upper layer. A/B protects you from a bad
+*image*, not from a bad *change*, and the difference only shows up when you need
+it.
+
+`--slot-private-upper` gives each slot its own upper (`upper-A`, `upper-B` on
+the overlay partition, instead of one `upper`). Nothing written while running A
+is visible from B. The bad edit is still in A's layer, A still will not boot, and
+B comes up exactly as it was — so "boot the other slot" is a real recovery path
+for configuration as well as for software.
+
+**What it costs.** The slots stop sharing *everything* the overlay covers. Under
+the default model that is the whole root: `/home`, `/etc`, `/opt`, installed
+packages. Booting the other slot for the first time gives you a machine that
+looks freshly imaged. That is the trade, and it is why this is not the default.
+
+**Use `--persist` for what should stay shared.** A `persist` directive is a bind
+outside the overlay, so it is unaffected by this and still crosses the slots:
+
+```bash
+./builder/run.sh --slot-private-upper \
+  --persist /home \
+  --persist /srv \
+  --persist /var/log
+```
+
+That combination is usually what people actually want: user data and logs follow
+the machine, while the configuration that can break a boot stays per-slot.
+
+**What stays shared regardless.** Machine identity is stored on the overlay
+partition directly rather than in the upper layer, so `machine-id` and the SSH
+host keys are the machine's either way — the other slot is not a different host
+to your fleet or to `known_hosts`.
+
+**Interactions worth knowing:**
+
+| | with `--slot-private-upper` |
+| --- | --- |
+| `--persist PATH` | unchanged; still shared by both slots |
+| `--slot-private PATH` | unchanged; it was already per-slot |
+| `--volatile PATH` | unchanged; a tmpfs either way |
+| `--reset-on-update` | still applies, and still needed — see below |
+| `ab-overlay-diff` | reads this slot's layer and says so |
+| Recovery: *reset writable state* | sets aside **only the booted slot's** layer |
+| Overlay partition usage | up to two copies of what the machine writes |
+
+`reset-on-update` is not made redundant by this. Slot B's upper holds whatever B
+wrote the *last* time it ran, which is the previous release — so after an update
+replaces B's rootfs, those files would shadow the ones the update just delivered,
+exactly as a shared upper would. The clearing still happens, per slot.
+
+**It cannot be changed by an update.** The machine records its layout in
+`/var/lib/overlay/.model` (`overlay+per-slot-upper` rather than `overlay`), and
+an image declaring the other one is refused at boot, the same way and for the
+same reason as a model change: every write the machine has made is in the store
+the old layout used, and applying the new one would show an operator an empty
+machine. Decide at imaging time.
+
+Verifying it on a running machine:
+
+```console
+$ grep upper /usr/lib/ab/state.conf
+upper per-slot
+$ ls -d /var/lib/overlay/upper*
+/var/lib/overlay/upper-A  /var/lib/overlay/upper-B
+$ dmesg | grep ab-overlay
+ab-overlay: root is now an overlay (lower=slot A, upper=upper-A on the overlay partition)
+ab-overlay:   each slot has its own upper layer; nothing written here reaches the other slot
+```
+
 ### Changing the model later
 
 You cannot, by update. A machine records its model, and an image declaring a
 different one is refused at boot — the slot boots untouched and the refusal goes
 to the kernel log. Everything the machine wrote is still on the partition, but it
 is laid out for the old model, and applying the new one would hide it in a way
-that is indistinguishable from data loss. Re-image instead.
+that is indistinguishable from data loss. Re-image instead. The same applies to
+`--slot-private-upper`, which is part of the same recorded identity.
 
 ### Seeing it on a running machine
 

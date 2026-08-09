@@ -3,17 +3,23 @@
 #
 # The root filesystem is an overlay: the read-only lower layer is the A/B root
 # slot exactly as the imager wrote it, and every write since lands in the upper
-# layer on the overlay partition. The upper layer is deliberately shared by both
+# layer on the overlay partition. By default that upper layer is shared by both
 # slots, so an A/B update replaces the OS without destroying /home.
 #
 # The cost of that is invisible from inside the running system: a file you edit
 # in slot A shadows slot B's copy of the same file, including one an update was
 # meant to deliver. Nothing in `ls` or `cat` says which layer you are looking at.
 # This prints that.
+#
+# An image built with --slot-private-upper gives each slot its own upper instead
+# (`upper-A`, `upper-B`). Which one this machine has changes both the directory
+# to walk and the advice at the bottom -- "these files shadow the image on both
+# slots" is simply false there -- so both are read from the manifest rather than
+# assumed.
 set -u
 
 OVL=/var/lib/overlay          # the overlay partition
-UPPER="$OVL/upper"
+UPPER=""                      # resolved from the manifest below
 LOWER=""                      # the booted slot, read-only; found below
 
 BOLD=""; DIM=""; RED=""; YEL=""; GRN=""; OFF=""
@@ -64,9 +70,11 @@ done
 # simply invisible, which is the failure mode this whole tool exists to prevent.
 CONF=/usr/lib/ab/state.conf
 MODEL=overlay
+UPPER_MODE=shared
 OVERLAYS=""; OTHERS=""
 if [ -r "$CONF" ]; then
     MODEL=$(awk '$1 == "model" { print $2; exit }' "$CONF")
+    UPPER_MODE=$(awk '$1 == "upper" { print $2; exit }' "$CONF")
     OVERLAYS=$(awk '$1 == "overlay" { print $2 }' "$CONF")
     OTHERS=$(awk '$1 == "persist" || $1 == "slot-private" || $1 == "volatile" \
                   { print $1 " " $2 }' "$CONF")
@@ -74,6 +82,25 @@ else
     OVERLAYS="/"               # no manifest: an image built before they existed
 fi
 [ -n "$MODEL" ] || MODEL=overlay
+[ -n "$UPPER_MODE" ] || UPPER_MODE=shared
+
+SLOT="$(sed -n 's/.*rauc\.slot=\([AB]\).*/\1/p' /proc/cmdline 2>/dev/null)"
+
+# Same rule the initramfs applies, and for the same reason: walking the shared
+# `upper` on a machine whose writes are all in `upper-A` would report a machine
+# that has changed nothing since imaging, which is the one answer this tool must
+# never give wrongly.
+if [ "$UPPER_MODE" = per-slot ]; then
+    if [ -z "$SLOT" ]; then
+        echo "ab-overlay-diff: this image gives each slot its own upper layer, but" >&2
+        echo "there is no rauc.slot= on the kernel command line to say which one is" >&2
+        echo "booted, so there is nothing safe to compare." >&2
+        exit 1
+    fi
+    UPPER="$OVL/upper-$SLOT"
+else
+    UPPER="$OVL/upper"
+fi
 
 if [ -z "$OVERLAYS" ]; then
     echo "${YEL}This image (model ${MODEL}) has no overlay, so nothing shadows the${OFF}"
@@ -96,8 +123,6 @@ if [ ! -d "$UPPER" ]; then
     echo "ab-overlay-diff: no upper layer at $UPPER" >&2
     exit 1
 fi
-
-SLOT="$(sed -n 's/.*rauc\.slot=\([AB]\).*/\1/p' /proc/cmdline 2>/dev/null)"
 
 # The lower layer has to be reached on purpose. The initramfs binds it inside
 # the new root before switching, but systemd mounts a fresh tmpfs over /run
@@ -210,9 +235,21 @@ fi
 
 if [ "$shadowing" -gt 0 ]; then
     echo ""
-    echo "The files above take precedence over the image on ${BOLD}both${OFF} slots, so an"
-    echo "A/B update cannot replace them and booting the other slot will not"
-    echo "leave them behind. If one of them is the problem, reboot and choose"
-    echo "${BOLD}Recovery: Slot <A|B>, reset writable state${OFF} from the GRUB menu -- what"
-    echo "is set aside is kept as ${BOLD}$OVL/*.prev${OFF}, nothing is deleted."
+    if [ "$UPPER_MODE" = per-slot ]; then
+        echo "The files above are private to slot ${BOLD}${SLOT}${OFF}: this image gives each slot"
+        echo "its own upper layer, so booting the other slot leaves every one of them"
+        echo "behind. That is the quickest way out if one of them is the problem --"
+        echo "nothing here is deleted by doing it, and the other slot's own layer is"
+        echo "at ${BOLD}$OVL/upper-$([ "$SLOT" = A ] && echo B || echo A)${OFF}."
+        echo ""
+        echo "To start this slot clean instead, choose ${BOLD}Recovery: Slot ${SLOT}, reset"
+        echo "writable state${OFF} from the GRUB menu; it sets only this slot's layer"
+        echo "aside, as ${BOLD}$OVL/upper-${SLOT}.prev${OFF}."
+    else
+        echo "The files above take precedence over the image on ${BOLD}both${OFF} slots, so an"
+        echo "A/B update cannot replace them and booting the other slot will not"
+        echo "leave them behind. If one of them is the problem, reboot and choose"
+        echo "${BOLD}Recovery: Slot <A|B>, reset writable state${OFF} from the GRUB menu -- what"
+        echo "is set aside is kept as ${BOLD}$OVL/*.prev${OFF}, nothing is deleted."
+    fi
 fi

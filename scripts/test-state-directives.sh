@@ -499,6 +499,210 @@ check "the ordinary entry still worked" '[ "$(cat "$R/etc/motd")" = release-1 ]'
 finish
 
 # =============================================================================
+# --- upper per-slot ----------------------------------------------------------
+#
+# The point of the option, stated as a test: a configuration change applied
+# while running slot A must not be able to stop slot B from booting. Everything
+# below is that one property and the ways it can be got wrong.
+#
+# /etc/bad.conf is the fixture on purpose. It is not in reset-on-update and not
+# in image-owned.list, so nothing else in the engine would drop it on a slot
+# change -- if it fails to reach slot B, the per-slot upper is the only reason.
+begin "per-slot upper: a change made in slot A cannot reach slot B"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+reset-on-update /usr
+keep /usr/local
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "root became an overlay"          'is_ab_overlay "$R"'
+echo "breaks-the-boot" > "$R/etc/bad.conf"
+echo "mine"            > "$R/home/a-file"
+check "A writes to its own upper"       '[ -f /ab-rw/upper-A/etc/bad.conf ]'
+check "no shared upper was created"     '[ ! -e /ab-rw/upper ]'
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "B never sees the bad config"     '[ ! -e "$R/etc/bad.conf" ]'
+check "B never sees A's other writes"   '[ ! -e "$R/home/a-file" ]'
+echo "b-only" > "$R/etc/bad.conf"
+check "B writes to its own upper"       '[ "$(cat /ab-rw/upper-B/etc/bad.conf)" = b-only ]'
+check "A's upper was not touched"       '[ "$(cat /ab-rw/upper-A/etc/bad.conf)" = breaks-the-boot ]'
+check "the layout was recorded"         '[ "$(cat /ab-rw/.model)" = overlay+per-slot-upper ]'
+finish
+
+# =============================================================================
+# The same fixture without the directive. Without this the case above would pass
+# just as happily against an engine that had lost the ability to share anything
+# at all, which is the failure this project keeps rediscovering: a test that
+# cannot fail.
+begin "the shared upper still carries that change across (the contrast)"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+reset-on-update /usr
+keep /usr/local
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "breaks-the-boot" > "$R/etc/bad.conf"
+check "A writes to the shared upper"    '[ -f /ab-rw/upper/etc/bad.conf ]'
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "B does see it, as it always has" '[ "$(cat "$R/etc/bad.conf")" = breaks-the-boot ]'
+check "no per-slot store was created"   '[ ! -e /ab-rw/upper-A ] && [ ! -e /ab-rw/upper-B ]'
+finish
+
+# =============================================================================
+# Separating the uppers separates /home too, which is rarely what anyone wants.
+# --persist is the answer, and it has to keep working alongside the directive.
+begin "per-slot upper: persist is how a path stays shared anyway"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+persist /home
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "data"    > "$R/home/alice"
+echo "a-only"  > "$R/etc/bad.conf"
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "/home crossed to the other slot" '[ "$(cat "$R/home/alice")" = data ]'
+check "/etc did not"                    '[ ! -e "$R/etc/bad.conf" ]'
+finish
+
+# =============================================================================
+# A per-slot upper does not remove the need to claw back OS paths on a slot
+# change. Slot B's upper holds whatever B wrote the last time it ran, which is
+# the *previous* release -- so after an update replaces B's rootfs, those files
+# shadow the ones the update just delivered, exactly as a shared upper would.
+begin "per-slot upper: a slot change still clears OS paths from that slot's upper"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+reset-on-update /usr
+reset-on-update /var/lib/dpkg
+keep /usr/local
+EOF
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+echo "stale" > "$R/usr/bin/distro-tool"       # the old release's -- must be dropped
+echo "mine"  > "$R/usr/local/bin/mine"        # the machine's -- must survive
+teardown
+run_engine "root=LABEL=rootfs-a rauc.slot=A"  # ...run A for a while...
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"  # ...and come back to B
+check "the stale OS file was cleared"   '[ "$(cat "$R/usr/bin/distro-tool")" = release-1 ]'
+check "/usr/local survived in B's upper" '[ "$(cat "$R/usr/local/bin/mine")" = mine ]'
+check "it was cleared from upper-B"     '[ ! -e /ab-rw/upper-B/usr/bin/distro-tool ]'
+check "no keep-aside left behind"       '[ ! -d /ab-rw/.keep ]'
+finish
+
+# =============================================================================
+# Switching the upper layout is the same fault as switching the model: every
+# write the machine has made is in the store the old layout used, and applying
+# the new one would show the operator an empty machine. Both directions.
+begin "turning the per-slot upper on by update is refused, not applied"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "mine" > "$R/home/keep-me"
+teardown
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+check "the change was refused"          'grep -q "REFUSING" "$WORK/out.log"'
+check "the reason names the upper"      'grep -q "Only the upper layer differs" "$WORK/out.log"'
+check "the recorded layout is unchanged" '[ "$(cat /ab-rw/.model)" = overlay ]'
+check "root is not an overlay"          '! is_ab_overlay "$R"'
+check "no per-slot store was created"   '[ ! -e /ab-rw/upper-B ]'
+check "the machine's data is untouched" '[ "$(cat /ab-rw/upper/home/keep-me)" = mine ]'
+finish
+
+# =============================================================================
+begin "turning the per-slot upper off by update is refused too"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "mine" > "$R/home/keep-me"
+teardown
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "the change was refused"          'grep -q "REFUSING" "$WORK/out.log"'
+check "the recorded layout is unchanged" '[ "$(cat /ab-rw/.model)" = overlay+per-slot-upper ]'
+check "root is not an overlay"          '! is_ab_overlay "$R"'
+check "the machine's data is untouched" '[ "$(cat /ab-rw/upper-A/home/keep-me)" = mine ]'
+finish
+
+# =============================================================================
+# The reset entry exists to get out from under a bad edit. Under a per-slot
+# upper the *other* slot's layer is the known-good state someone is reaching for
+# when they use it, so wiping that too would destroy the thing being rescued.
+begin "per-slot upper: a reset spares the other slot's upper layer"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+echo "bad-edit" > "$R/etc/bad.conf"
+teardown
+run_engine "root=LABEL=rootfs-b rauc.slot=B"
+echo "b-good" > "$R/etc/b-marker"
+teardown
+run_engine "root=LABEL=rootfs-a rauc.slot=A ab.state=reset"
+check "slot A starts clean"             '[ ! -e "$R/etc/bad.conf" ]'
+check "A's old upper is kept as .prev"  '[ "$(cat /ab-rw/upper-A.prev/etc/bad.conf)" = bad-edit ]'
+check "B's upper was left alone"        '[ "$(cat /ab-rw/upper-B/etc/b-marker)" = b-good ]'
+check "B got no .prev it did not ask for" '[ ! -e /ab-rw/upper-B.prev ]'
+check "it was said out loud"            'grep -q "other slot.s upper layer was left alone" "$WORK/out.log"'
+finish
+
+# =============================================================================
+# grub.cfg always passes rauc.slot, so this is only reachable from a hand-typed
+# command line -- but guessing there would mean handing the machine a layer it
+# has never written to, which from inside looks exactly like a wipe.
+begin "per-slot upper with no rauc.slot is refused rather than guessed"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper per-slot
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a"
+check "the refusal was logged"          'grep -q "no rauc.slot= on the kernel command line" "$WORK/out.log"'
+check "root is not an overlay"          '! is_ab_overlay "$R"'
+check "no store was invented"           '[ ! -e /ab-rw/upper- ] && [ ! -e /ab-rw/upper ]'
+finish
+
+# =============================================================================
+# An unrecognised value must not become "per-slot" by accident: that would move
+# every existing machine's writes out from under it on the next boot.
+begin "an unknown 'upper' value falls back to the shared layer"
+cat > "$WORK/slot/usr/lib/ab/state.conf" <<'EOF'
+model overlay
+upper sometimes
+overlay /
+EOF
+run_engine "root=LABEL=rootfs-a rauc.slot=A"
+check "it was reported"                 'grep -q "unknown .upper sometimes" "$WORK/out.log"'
+check "root became an overlay"          'is_ab_overlay "$R"'
+check "the shared upper was used"       'echo x > "$R/etc/f" && [ -f /ab-rw/upper/etc/f ]'
+check "the recorded layout is the plain one" '[ "$(cat /ab-rw/.model)" = overlay ]'
+finish
+
+# =============================================================================
 echo ""
 echo "================================================"
 echo "  passed: $PASS   failed: $FAIL"

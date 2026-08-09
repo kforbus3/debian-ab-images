@@ -35,7 +35,8 @@ export default function Build() {
     encrypt: false, unlock: "keyfile", luks_passphrase: "", tang_url: "",
     store_passphrase: false,
     run_script: "", own_paths: "",
-    state_model: "overlay", persist_paths: "", slot_private_paths: "",
+    state_model: "overlay", slot_private_upper: false,
+    persist_paths: "", slot_private_paths: "",
     volatile_paths: "", reset_paths: "", keep_paths: "",
   });
   const [store, setStore] = useState<{ configured: boolean; provider: string } | null>(null);
@@ -335,6 +336,35 @@ export default function Build() {
                     different one refuses the change at boot rather than hiding the state it
                     already has.
                   </p>
+
+                  {/* The upper layer is shared by both slots by default, which
+                      means a bad edit follows you into the other slot -- so
+                      booting it recovers from a bad image but not from a bad
+                      change. This is the option that fixes that, and it costs
+                      the sharing, so it says both things. */}
+                  <label className="mt-3 flex items-start gap-2 text-sm text-zinc-300">
+                    <input type="checkbox" className="mt-0.5"
+                           checked={opts.slot_private_upper}
+                           onChange={(e) => set("slot_private_upper", e.target.checked)} />
+                    <span>
+                      Give each slot its own upper layer
+                      <span className="block text-xs text-zinc-500">
+                        A change that stops slot A booting cannot follow you into slot B, so the
+                        other slot is a real fallback and not just an older OS. The slots then
+                        share nothing the overlay covers — including{" "}
+                        <code className="text-zinc-300">/home</code> and{" "}
+                        <code className="text-zinc-300">/etc</code> — so list what should stay
+                        shared under <em>shared across slots</em> below. Machine identity
+                        (machine-id, SSH host keys) is kept shared either way.
+                      </span>
+                    </span>
+                  </label>
+                  {opts.slot_private_upper && (
+                    <p className="mt-1 text-xs text-amber-500/80">
+                      Like the model, this cannot be turned on or off by an update — a machine
+                      imaged the other way refuses the change at boot.
+                    </p>
+                  )}
 
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div>

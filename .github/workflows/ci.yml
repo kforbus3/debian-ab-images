@@ -382,6 +382,26 @@ jobs:
               || { echo "::error::state model $model did not boot as its manifest describes"; exit 1; }
           done
 
+      - name: A per-slot upper layer really does keep the slots apart
+        run: |
+          # The container harness proves the engine picks the right directory.
+          # Only a real boot proves the result is a system that comes up on
+          # both slots -- an empty upper-B is a slot that has never run, which
+          # is the one case where "it booted" is not a given. --persist /home
+          # is in here because it is the combination the docs recommend, and
+          # the harness asserts that /home still crosses while the root does not.
+          rm -f output/*-target.img
+          ./builder/run.sh --arch amd64 --distro debian --suite trixie \
+            --hostname sm-perslot --username ci --password ci --image-size 8 \
+            --compress none --slot-private-upper --persist /home \
+            --output /output/sm-perslot.img
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            -e SRC=/output/sm-perslot.img -e BOOT_TIMEOUT=600 \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-state-model.sh \
+            | tee sm-perslot.log
+          grep -q "failed: 0" sm-perslot.log \
+            || { echo "::error::the per-slot upper layer did not behave as its manifest describes"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

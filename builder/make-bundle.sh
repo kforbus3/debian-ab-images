@@ -164,6 +164,22 @@ fi
 [ -n "$COMPATIBLE" ] || die "could not read 'compatible' from the image's rauc/system.conf"
 log "compatible=$COMPATIBLE  version=$VERSION"
 
+# The writable-state layout this bundle carries. `compatible` does not cover it:
+# RAUC will happily install a bundle whose state.conf declares a different model
+# or a different upper mode, and the machine then refuses it at boot -- correctly,
+# because applying it would hide everything the machine has written. That refusal
+# reaches only the kernel log of a machine that just failed to come up, so say it
+# here, where whoever is building the bundle can still act on it.
+_st="$WORK/slot/usr/lib/ab/state.conf"
+if [ -r "$_st" ]; then
+    _model="$(awk '$1=="model"{print $2; exit}' "$_st")"
+    _upper="$(awk '$1=="upper"{print $2; exit}' "$_st")"
+    [ -n "$_upper" ] || _upper=shared
+    _layout="${_model:-overlay}"
+    [ "$_upper" = per-slot ] && _layout="$_layout+per-slot-upper"
+    log "state layout=$_layout  (installs only on machines imaged with this layout)"
+fi
+
 # RAUC verifies the bundle against the running system's `compatible`, which is
 # what stops a Debian bundle being installed onto an Ubuntu machine.
 # A tar, not a filesystem image. RAUC picks its update handler from the image's
