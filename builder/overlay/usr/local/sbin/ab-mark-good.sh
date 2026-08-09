@@ -21,17 +21,39 @@ for arg in $(cat /proc/cmdline); do
     esac
 done
 
+# Every failure below exits non-zero. It used to exit 0 on all of them, which
+# meant `systemctl status ab-mark-good` said "success" on a machine whose try
+# counter was still armed -- so the one place anybody would look to explain a
+# spontaneous slot switch actively said there was nothing wrong. A machine one
+# reboot away from silently changing slots must not look healthy.
 if [ -z "$SLOT" ]; then
     echo "ab-mark-good: cannot determine booted slot from /proc/cmdline" >&2
-    exit 0
+    echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
+    exit 1
 fi
 if [ ! -s "$GRUBENV" ]; then
     echo "ab-mark-good: $GRUBENV missing; is /boot mounted?" >&2
-    exit 0
+    echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
+    exit 1
 fi
 
 # _OK as well as _TRY: the try counter is what GRUB falls back on, and _OK is
 # what RAUC reads to decide whether a slot is usable at all. Setting only the
 # counter leaves RAUC convinced every slot is bad.
-grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1"
+if ! grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1"; then
+    echo "ab-mark-good: could not write $GRUBENV (is /boot read-only?)" >&2
+    echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
+    exit 1
+fi
+
+# Read it back rather than trusting the write. grub-editenv writes a temporary
+# file and renames it into place, so a full or read-only /boot can fail in ways
+# that still exit 0 -- and the symptom of believing a failed write is a machine
+# that changes slots by itself on the next reboot, which is not a thing anyone
+# traces back to here.
+if [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_TRY=//p")" != "0" ]; then
+    echo "ab-mark-good: ${SLOT}_TRY did not stick after writing $GRUBENV" >&2
+    echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
+    exit 1
+fi
 echo "ab-mark-good: slot $SLOT marked good (${SLOT}_TRY=0)"

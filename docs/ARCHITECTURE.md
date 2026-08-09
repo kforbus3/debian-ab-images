@@ -37,6 +37,20 @@ per-slot `TRY` counters and `_OK` flags in `grubenv`, then boots
 `root=LABEL=rootfs-a|b`. This mirrors RAUC's documented GRUB integration, so RAUC
 can flip slots by editing `grubenv`.
 
+**When a slot is marked good.** `grub.cfg` arms a one-shot fallback on every boot
+(`<SLOT>_TRY=1`); `ab-mark-good` disarms it, and if it does not, the next boot
+uses the other slot. That unit runs **before logins are permitted**
+(`Before=systemd-user-sessions.service`), which makes the rule *if you can log
+in, this slot is already marked good*. It is not ordered after
+`multi-user.target`, which is where it used to sit: that put it ~90 seconds into
+boot against a login prompt at ~38 seconds, so anyone who logged in and rebooted
+in between came back on the other slot — and since that boot left its own counter
+armed too, the machine then alternated slots on every reboot. The trade is that a
+boot which reaches a login prompt and later fails a service no longer rolls back
+by itself; everything rollback exists for (kernel, initramfs, root filesystem,
+emergency) happens earlier and is still covered.
+`scripts/test-slot-stability.sh` holds the line.
+
 ### Writable state
 
 A/B replaces the root filesystem, so everything a machine writes has to live
