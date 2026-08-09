@@ -83,9 +83,22 @@ report() {   # report <phase> <percent> [detail]
     [ -n "$REPORT_URL" ] || return 0
     _p="$1"; _pct="${2:-}"; _d="${3:-}"
     (
-        $BB wget -q -T 3 -O /dev/null --post-data \
+        if ! $BB wget -q -T 3 -O /dev/null --post-data \
             "id=${CLIENT_ID}&phase=${_p}&percent=${_pct}&detail=${_d}&disk=${TARGET:-}&url=${IMG_URL}" \
-            "$REPORT_URL" 2>/dev/null || true
+            "$REPORT_URL" 2>/dev/null
+        then
+            # Once per run, not per phase. Reporting stays best-effort and the
+            # imaging carries on regardless -- but silence here is exactly what
+            # let a whole deployment image perfectly and never appear in the web
+            # UI, with nothing anywhere saying why. A machine that cannot report
+            # should say so on the console it is already printing to.
+            if ! [ -f /tmp/.report-unreachable ]; then
+                : > /tmp/.report-unreachable
+                say "NOTE: cannot reach ${REPORT_URL}"
+                say "      imaging continues, but this machine will not appear on the"
+                say "      Imaging page. Check WEBUI_ADDR in server/.env."
+            fi
+        fi
     ) &
 }
 

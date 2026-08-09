@@ -4,6 +4,46 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Fixed: machines being imaged never appeared on the Imaging page.** A machine
+would show `booting imager` on the Provisioning page, image perfectly, boot —
+and never show up on the Imaging page at all, with no error anywhere.
+
+The imager posts progress to `<image host>/api/imaging/report`. That is the only
+address it has: the iPXE scripts pass `imager.url=` and nothing else, so `init`
+derives the report URL from the host serving the image. That host is the
+provisioning nginx, whose config had exactly three locations — `/images/jobs/`,
+`/`, `/health` — and no `/api/` at all. Every report was a POST into the static
+file root, answered 404 and discarded. The web UI runs as a separate stack on
+port 8080 and nothing bridged the two.
+
+Reporting is best-effort by design, so `report()` ended in `|| true` and said
+nothing. That silence is why this could sit there looking like a UI bug.
+
+- The provisioning nginx now proxies **exactly** `/api/imaging/report` and
+  `/api/imaging/checkin` to the web UI, configured by `WEBUI_ADDR` in
+  `server/.env` (default `127.0.0.1:8080`, right when both stacks share a host).
+- Exact-match locations, not a prefix over `/api/`. The rest of the API is the
+  admin surface, and although it is all behind `require_auth`, none of it should
+  be reachable from the imaging segment. `/api/imaging` (the list) and
+  `/api/imaging/<id>` (delete) are deliberately not routed either.
+- A `WEBUI_ADDR` that does not resolve no longer takes PXE down with it: nginx
+  refuses to start on an unresolvable `proxy_pass` name, so the entrypoint runs
+  `nginx -t`, falls back to the default and says so. Losing the progress display
+  is survivable; losing PXE is not.
+- The imager now prints a note on the console, once per run, when it cannot
+  reach the report URL — imaging still continues, but the failure is no longer
+  invisible.
+
+This also fixes first-boot check-in, which used the same derived URL: the
+`checkin_url` the imager leaves in `/boot/ab-deploy.json` pointed at the same
+dead route, so `ab-checkin` could never reach the server either. Note a machine
+that has already moved to its production network still cannot reach
+`SERVER_IP`; that is the same limitation `UPDATE_IP` exists for.
+
+`scripts/test-imaging-report-route.sh` runs the real container against a stub
+web UI and asserts both that the two endpoints arrive and that nothing else
+does. Without the fix it reports `POST /api/imaging/report -> 404`.
+
 **The A/B fallback is now armed for updates, not for every boot.** A slot carries
 `<SLOT>_PROVEN` in grubenv; GRUB boots a proven slot outright and only puts an
 **unproven** one on probation. `ab-slot-pending.sh` sets `_PROVEN=0` on the slot
