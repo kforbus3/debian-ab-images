@@ -784,12 +784,31 @@ def build_bundle_cmd(image: str, version: str = "", description: str = "",
     return ["bash", "-c", script], f"Build update bundle from {image}", env
 
 
+def bundles_dir() -> str:
+    return os.path.join(settings.output_dir, "bundles")
+
+
+def _latest_pointer() -> str:
+    """The bundle `ab-update` with no arguments installs, or "" if unset.
+
+    make-bundle.sh writes this file; nothing else did until deletion existed.
+    Directory listing is off on the HTTP server, so this pointer is the only
+    way an unattended machine finds a bundle at all.
+    """
+    try:
+        with open(os.path.join(bundles_dir(), "latest")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def list_bundles() -> list[dict]:
     """Update bundles available to install, newest first."""
-    d = os.path.join(settings.output_dir, "bundles")
+    d = bundles_dir()
     items: list[dict] = []
     if not os.path.isdir(d):
         return items
+    latest = _latest_pointer()
     for fn in sorted(os.listdir(d)):
         if not fn.endswith(".raucb"):
             continue
@@ -799,6 +818,11 @@ def list_bundles() -> list[dict]:
             "name": fn,
             "size": st.st_size,
             "created": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+            # Which row a machine running plain `ab-update` will install. Worth
+            # showing rather than leaving to be inferred from the dates: it is
+            # the newest *build*, and deleting it changes what the whole fleet
+            # gets, so it has to be visible before someone deletes something.
+            "is_latest": fn == latest,
         }
         try:
             with open(full + ".json") as f:
@@ -808,6 +832,55 @@ def list_bundles() -> list[dict]:
         items.append(row)
     items.sort(key=lambda r: r["created"], reverse=True)
     return items
+
+
+def delete_bundle(name: str) -> dict:
+    """Remove a bundle, its sidecars, and repair the `latest` pointer.
+
+    The pointer is the whole reason this is not a three-line `os.remove`.
+    `ab-update` with no arguments fetches `<server>/bundles/latest` and installs
+    whatever it names; deleting that bundle without touching the file leaves
+    every unattended machine in the fleet fetching a 404 -- which ab-update
+    reports as a download failure or "is not a RAUC bundle", neither of which
+    points at a deleted file on the server.
+
+    So the pointer is moved to the newest bundle that is left, and removed
+    entirely when the last one goes. Returns what happened, because "the fleet
+    now updates to something else" is not a detail to leave unsaid.
+    """
+    if "/" in name or ".." in name or not name.endswith(".raucb"):
+        raise ValueError("invalid name")
+    d = bundles_dir()
+    path = os.path.join(d, name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(name)
+
+    was_latest = _latest_pointer() == name
+    os.remove(path)
+    for sidecar in (path + ".json", path + ".sha256"):
+        if os.path.isfile(sidecar):
+            os.remove(sidecar)
+
+    new_latest = None
+    if was_latest:
+        remaining = list_bundles()          # newest first, and the file is gone
+        pointer = os.path.join(d, "latest")
+        if remaining:
+            new_latest = remaining[0]["name"]
+            # Written whole and renamed into place: a machine can be reading
+            # this file at the moment it changes, and a half-written pointer is
+            # a fleet fetching a truncated filename.
+            tmp = pointer + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(new_latest + "\n")
+            os.replace(tmp, pointer)
+        elif os.path.isfile(pointer):
+            # Nothing left to point at. Removing it makes `ab-update` say "No
+            # 'latest' pointer published", which is true and actionable; leaving
+            # it would name a bundle that is not there.
+            os.remove(pointer)
+
+    return {"deleted": name, "was_latest": was_latest, "new_latest": new_latest}
 
 
 def imager_arches() -> dict[str, bool]:

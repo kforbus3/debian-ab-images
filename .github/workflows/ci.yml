@@ -153,6 +153,16 @@ jobs:
           # signature size and reported a corrupt bundle. A 404 is free.
           python tests/test_spa_routing.py
 
+      - name: Deleting a bundle keeps the `latest` pointer true
+        working-directory: webui/backend
+        run: |
+          # `ab-update` with no arguments installs whatever bundles/latest
+          # names, and directory listing is off -- so a delete that removes the
+          # file and leaves the pointer breaks every unattended machine at once,
+          # as a 404 that reports itself as a bad bundle rather than a missing
+          # one. These assert the pointer always names a file that exists.
+          python tests/test_bundle_delete.py
+
       - name: Overlay file management
         working-directory: webui/backend
         run: |

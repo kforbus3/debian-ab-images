@@ -45,7 +45,10 @@ through the Docker socket.
 - **Updates** — build a signed RAUC bundle from an image you have already built,
   and see which versions the fleet is running. Installing a bundle writes the slot
   a machine is not running on and reboots into it, with automatic rollback if that
-  slot fails to come up. See [UPDATES.md](UPDATES.md).
+  slot fails to come up. Bundles can be deleted here too; the one marked **latest**
+  is what a machine running plain `ab-update` installs, and deleting it moves that
+  pointer rather than leaving the fleet fetching a file that is gone. See
+  [UPDATES.md](UPDATES.md).
 - **Secrets manager** *(optional)* — connect OpenBao or HashiCorp Vault and have
   encrypted builds generate their own LUKS recovery passphrase and file it under
   the image's name, instead of somebody inventing one and keeping it in a note.

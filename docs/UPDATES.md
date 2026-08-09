@@ -98,7 +98,33 @@ update your fleet will install.
 
 Bundles land in `output/bundles/` and are served at `http://<server>/bundles/`.
 The newest is recorded in `output/bundles/latest`, which is what `ab-update`
-reads when given no arguments.
+reads when given no arguments. The Updates page marks that row **latest**.
+
+### Deleting a bundle
+
+The trash button on the Updates page removes the bundle and its `.json` and
+`.sha256` sidecars, and — this is the part that matters — **repoints `latest`**
+at the newest bundle left, or removes it when the last one goes.
+
+Deleting by hand is one command more than it looks:
+
+```bash
+rm output/bundles/old.raucb output/bundles/old.raucb.{json,sha256}
+# If `latest` named it, fix it, or every unattended machine fetches a 404:
+ls -t output/bundles/*.raucb | head -1 | xargs basename > output/bundles/latest
+```
+
+Directory listing is off on the HTTP server, so `latest` is the *only* way an
+unattended machine finds a bundle. A pointer naming a deleted file does not fail
+where you deleted it; it fails on every machine running plain `ab-update`, and
+reports itself as a download failure or `is not a RAUC bundle` rather than as a
+missing file.
+
+Deleting a bundle the fleet is **running** is safe — the update is already on
+those machines' disks, and rollback uses the other slot, not the bundle. What it
+costs is the ability to install that version anywhere else, so the UI says how
+many machines report it before asking. Deletion is refused while a bundle build
+is running, because that build ends by rewriting the same pointer.
 
 ## Installing on a machine
 

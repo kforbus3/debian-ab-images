@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { api, apiError, fmtBytes } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Spinner, LogView } from "../components/ui";
-import { Package, Copy, RefreshCw, KeyRound } from "lucide-react";
+import { Package, Copy, RefreshCw, KeyRound, Trash2 } from "lucide-react";
 import { secretName } from "./Secrets";
 
 type Bundle = {
-  name: string; size: number; created: string;
+  name: string; size: number; created: string; is_latest?: boolean;
   version?: string; compatible?: string; source?: string; description?: string;
 };
 
@@ -72,6 +72,26 @@ export default function Updates() {
       };
       es.onerror = () => { es.close(); setBusy(false); load(); };
     } catch (e) { toast.error(apiError(e)); setBusy(false); }
+  }
+
+  // Deleting a bundle is cheap to do and expensive to get wrong, so the confirm
+  // names the two consequences that are not visible from the row: the fleet may
+  // be running it, and it may be the one plain `ab-update` installs.
+  async function removeBundle(b: Bundle) {
+    const inUse = b.version ? running[b.version] : 0;
+    const warn = [
+      `Delete ${b.name}?`,
+      inUse ? `\n${inUse} machine(s) report running version ${b.version}. They keep running it — the update is already on their disk — but this version could no longer be installed anywhere else.` : "",
+      b.is_latest ? `\nThis is the bundle that plain \`ab-update\` installs. The pointer will move to the next newest bundle, or be removed if this is the last one.` : "",
+    ].filter(Boolean).join("\n");
+    if (!confirm(warn)) return;
+    try {
+      const { data } = await api.delete(`/bundles/${encodeURIComponent(b.name)}`);
+      if (data.new_latest) toast.success(`Deleted — ab-update now installs ${data.new_latest}`);
+      else if (data.was_latest) toast.success("Deleted — no bundles left, ab-update has nothing to install");
+      else toast.success("Deleted");
+      load();
+    } catch (e) { toast.error(apiError(e)); }
   }
 
   const stored = !!image && inStore.has(secretName(image));
@@ -194,17 +214,44 @@ export default function Updates() {
                 <tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
                   <th className="px-5 py-2">Bundle</th><th className="px-3 py-2">Version</th>
                   <th className="px-3 py-2">Compatible</th><th className="px-3 py-2">Size</th>
-                  <th className="px-3 py-2">Built</th>
+                  <th className="px-3 py-2">Built</th><th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/70">
                 {bundles.map((b) => (
-                  <tr key={b.name}>
-                    <td className="px-5 py-2.5 font-mono text-xs text-zinc-300">{b.name}</td>
-                    <td className="px-3 py-2.5 text-zinc-400">{b.version || "—"}</td>
+                  <tr key={b.name} className="hover:bg-zinc-800/40">
+                    <td className="px-5 py-2.5 font-mono text-xs text-zinc-300">
+                      <div className="flex items-center gap-2">
+                        {b.name}
+                        {/* Which bundle a machine running bare `ab-update` gets.
+                            Without this the fleet-wide effect of deleting a row
+                            is invisible until machines start failing. */}
+                        {b.is_latest && (
+                          <span title="`ab-update` with no arguments installs this one">
+                            <Badge color="green">latest</Badge>
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-zinc-400">
+                      {b.version || "—"}
+                      {b.version && running[b.version] > 0 && (
+                        <span className="ml-1.5 text-xs text-zinc-500">
+                          ({running[b.version]} running)
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-xs text-zinc-500">{b.compatible || "—"}</td>
                     <td className="px-3 py-2.5 tabular-nums text-zinc-400">{fmtBytes(b.size)}</td>
                     <td className="px-3 py-2.5 text-xs text-zinc-500">{b.created.replace("T", " ").replace("+00:00", "")}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex justify-end">
+                        <Button size="sm" variant="ghost" onClick={() => removeBundle(b)}
+                                title="Delete this bundle">
+                          <Trash2 size={14} className="text-red-400" />
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
