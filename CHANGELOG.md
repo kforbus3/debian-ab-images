@@ -4,6 +4,52 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Fixed: a machine could switch slots by itself after a perfectly good boot.**
+Image a machine, log in, change something, reboot — and it comes up on the other
+slot with none of your changes. It reads as the machine reverting itself. The
+report that found this was "boot the image, `hostnamectl set-hostname`, reboot,
+and it boots slot B".
+
+`grub.cfg` arms a one-shot fallback on every boot (`<SLOT>_TRY=1`) and
+`ab-mark-good` disarms it once the system is up. It was ordered
+`After=multi-user.target`, and on a measured machine that meant it ran **~92
+seconds** into boot while the login prompt appeared at **~38 seconds** — a ~50
+second window where the machine was fully usable and the counter was still
+armed. Reboot inside it and GRUB does exactly what it was told: skip this slot.
+Nothing about the machine looked wrong, because nothing was: the fallback fired
+as designed, far too late to be disarmed by a unit nobody was waiting for.
+
+Three fixes:
+
+- **`ab-mark-good` now runs before logins are permitted**
+  (`Before=systemd-user-sessions.service`) rather than after
+  `multi-user.target`. The rule is now "if you can log in, this slot is already
+  marked good". The trade is deliberate and narrow: a boot that reaches a login
+  prompt and then fails a later service no longer rolls back on its own.
+  Everything A/B rollback actually exists for — an unbootable kernel, a broken
+  initramfs, a root that will not mount, a drop to emergency — happens before
+  that point and is still covered.
+- **An ordering cycle is gone.** `ab-mark-good` was `After=multi-user.target`
+  *and* `WantedBy=multi-user.target`, while `ab-checkin` was `After=` it and also
+  `WantedBy=multi-user.target`. systemd broke the loop by deleting a job at every
+  boot (`Found ordering cycle on multi-user.target/start`). It chose `ab-checkin`
+  on the boots that were watched, but both units are only *Wanted*, so both were
+  eligible — and deleting `ab-mark-good` means the counter is never reset at all.
+  `ab-checkin` no longer orders itself after `ab-mark-good`; it only reports, so
+  the edge bought nothing.
+- **Failures are no longer silent.** `ab-mark-good.sh` exited 0 on every failure
+  path, so `systemctl status ab-mark-good` said "success" on a machine whose
+  counter was still armed — the one place anyone would look actively said
+  nothing was wrong. It now exits non-zero, says the counter is still armed, and
+  reads the value back after writing rather than trusting the write.
+
+`scripts/test-slot-stability.sh` is the regression test, in the nightly boot
+matrix: boot a machine three times and assert it never changes slot on its own.
+Its `early-reboot` mode reboots 45 seconds in, which is what a person does and
+what used to fail. Nothing covered this before — the only related check was a
+soft `WARN` in the update test — so a machine that alternated slots for the rest
+of its life would have shipped green.
+
 **Bundles can be deleted from the web UI.** There was no way to remove one short
 of reaching into `output/bundles/` on the server, so the list only ever grew —
 at roughly half a gigabyte per bundle.

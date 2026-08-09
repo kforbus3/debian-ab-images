@@ -241,6 +241,25 @@ jobs:
             --entrypoint bash debian-ab-builder:amd64 /s/test-overlay-boot.sh | tee boot.log
           grep -q "root-fstype: overlay" boot.log || { echo "::error::root is not an overlay"; exit 1; }
 
+      - name: A healthy machine keeps booting the same slot
+        run: |
+          # The gap nothing watched. grub.cfg arms a one-shot fallback every
+          # boot and ab-mark-good disarms it; ordered After=multi-user.target it
+          # ran ~90s in, while the login prompt appeared at ~38s. Anyone who
+          # logged in and rebooted in between came back up on the *other slot*
+          # with none of their changes -- which reads as the machine reverting
+          # itself. Three modes: settle-then-poweroff, the reported
+          # hostname-then-reboot, and a reboot 45s in, which is what a person
+          # actually does and what used to fail.
+          for mode in poweroff early-reboot; do
+            docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+              -e SRC=/output/ovl-test.img -e ARCH=amd64 -e "MODE=$mode" -e BOOT_TIMEOUT=600 \
+              --entrypoint bash debian-ab-builder:amd64 /s/test-slot-stability.sh \
+              | tee "slot-$mode.log"
+            grep -q "failed: 0" "slot-$mode.log" \
+              || { echo "::error::slot stability regressed ($mode)"; exit 1; }
+          done
+
       - name: Recovery resets the overlay without destroying it
         run: |
           docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
@@ -421,4 +440,5 @@ jobs:
             rec.log
             state.log
             sm-*.log
+            slot-*.log
             output/*.log
