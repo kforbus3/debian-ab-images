@@ -50,7 +50,10 @@ MODE="${MODE:-poweroff}"
 #                    blessed, so an update that boots but is not healthy still
 #                    rolls back. Same staging as rollback, but the slot is left
 #                    entirely functional and only the check says no.
-case "$MODE" in poweroff|hostname-reboot|early-reboot|rollback|health-fail) ;; *) echo "HARNESS-FAIL: bad MODE"; exit 1;; esac
+# assigned-name   -- the imager leaves the name assigned in the web UI on the
+#                    BOOT partition; machine-identity must apply it, and it must
+#                    survive a reboot rather than reverting to the image's.
+case "$MODE" in poweroff|hostname-reboot|early-reboot|rollback|health-fail|assigned-name) ;; *) echo "HARNESS-FAIL: bad MODE"; exit 1;; esac
 
 SRC="${SRC:-/output/marktest.img}"
 DISK="${DISK:-/output/slot-stability-${MODE}.img}"
@@ -327,8 +330,24 @@ prime_rollback() {
     detach
 }
 
+# What imager/init writes to the BOOT partition after dd'ing the image, for a
+# machine the web UI has given a name. No checkin_url on purpose: ab-checkin
+# exits immediately without one, so this does not spend the boot waiting on a
+# provisioning server that is not there.
+ASSIGNED=assigned-01
+prime_assigned_name() {
+    attach
+    mkdir -p /mnt/bootp
+    mount "$BOOTP" /mnt/bootp || fail "mount BOOT"
+    printf '{"image":"test","id":"aa:bb:cc:dd:ee:01","hostname":"%s"}\n' "$ASSIGNED" \
+        > /mnt/bootp/ab-deploy.json
+    sync; umount /mnt/bootp; detach
+    echo "  wrote /boot/ab-deploy.json with hostname=$ASSIGNED"
+}
+
 install_probe
 case "$MODE" in rollback|health-fail) prime_rollback;; esac
+[ "$MODE" = assigned-name ] && prime_assigned_name
 
 echo ""
 echo "=== grubenv as imaged ==="
@@ -348,6 +367,13 @@ if [ "$MODE" = rollback ] || [ "$MODE" = health-fail ]; then
 else
     [ "$S1" = "A" ] && ok "boot 1 used slot A, as ORDER says" \
                     || bad "boot 1 used slot $S1, expected A"
+fi
+
+if [ "$MODE" = assigned-name ]; then
+    H1=$(probe_report 1 | sed -n 's/^ *hostname=//p' | tr -d "\r")
+    [ "$H1" = "$ASSIGNED" ] \
+        && ok "boot 1 came up as '$ASSIGNED', not the image's own name" \
+        || bad "boot 1 hostname is '$H1', expected '$ASSIGNED'"
 fi
 
 echo ""
@@ -381,6 +407,15 @@ elif [ "$S2" = "$S1" ]; then
     ok "boot 2 stayed on slot $S2"
 else
     bad "boot 2 switched to slot $S2 with no update installed -- a healthy machine changed slots on its own"
+fi
+
+if [ "$MODE" = assigned-name ]; then
+    # The name is stored on the overlay partition, not just written to
+    # /etc/hostname, so it survives updates and is right in both slots. Boot 2
+    # is where a name that was only ever set in memory would revert.
+    H2=$(probe_report 2 | sed -n 's/^ *hostname=//p' | tr -d "\r")
+    [ "$H2" = "$ASSIGNED" ] && ok "boot 2 is still '$ASSIGNED'" \
+                           || bad "boot 2 hostname is '$H2'; the name did not persist"
 fi
 
 echo ""

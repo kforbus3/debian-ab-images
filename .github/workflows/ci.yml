@@ -163,6 +163,15 @@ jobs:
           # one. These assert the pointer always names a file that exists.
           python tests/test_bundle_delete.py
 
+      - name: A machine's assigned name reaches the kernel command line
+        working-directory: webui/backend
+        run: |
+          # An image cannot carry a hostname, so the name is assigned per MAC
+          # and travels on the kernel command line. A space in it would split
+          # into a second parameter, and a sanitised name would mean the UI and
+          # the machine disagree -- so names are refused, not corrected.
+          python tests/test_assignment_hostname.py
+
       - name: Overlay file management
         working-directory: webui/backend
         run: |
@@ -271,7 +280,10 @@ jobs:
           # shipped once as WantedBy=boot-complete.target, which is a Wants=
           # -- a failing check left the target `active`, the slot was blessed
           # anyway and nothing rolled back. Only a boot showed that.
-          for mode in poweroff early-reboot rollback health-fail; do
+          # assigned-name proves the other half: the name the imager leaves on
+          # the BOOT partition is actually applied, and survives a reboot rather
+          # than being set once in memory.
+          for mode in poweroff early-reboot rollback health-fail assigned-name; do
             docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
               -e SRC=/output/ovl-test.img -e ARCH=amd64 -e "MODE=$mode" -e BOOT_TIMEOUT=600 \
               --entrypoint bash debian-ab-builder:amd64 /s/test-slot-stability.sh \
