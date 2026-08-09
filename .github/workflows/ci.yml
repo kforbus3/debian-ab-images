@@ -251,7 +251,10 @@ jobs:
           # itself. Three modes: settle-then-poweroff, the reported
           # hostname-then-reboot, and a reboot 45s in, which is what a person
           # actually does and what used to fail.
-          for mode in poweroff early-reboot; do
+          # rollback is the counterweight: arming the counter only for updates
+          # must not quietly remove the fallback. It stages what an update
+          # stages, makes the new slot unhealthy, and asserts B -> A.
+          for mode in poweroff early-reboot rollback; do
             docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
               -e SRC=/output/ovl-test.img -e ARCH=amd64 -e "MODE=$mode" -e BOOT_TIMEOUT=600 \
               --entrypoint bash debian-ab-builder:amd64 /s/test-slot-stability.sh \

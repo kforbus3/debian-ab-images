@@ -37,19 +37,40 @@ per-slot `TRY` counters and `_OK` flags in `grubenv`, then boots
 `root=LABEL=rootfs-a|b`. This mirrors RAUC's documented GRUB integration, so RAUC
 can flip slots by editing `grubenv`.
 
-**When a slot is marked good.** `grub.cfg` arms a one-shot fallback on every boot
-(`<SLOT>_TRY=1`); `ab-mark-good` disarms it, and if it does not, the next boot
-uses the other slot. That unit runs **before logins are permitted**
-(`Before=systemd-user-sessions.service`), which makes the rule *if you can log
-in, this slot is already marked good*. It is not ordered after
+**Probation is armed for updates, not for boots.** A slot carries
+`<SLOT>_PROVEN`, meaning "this has booted successfully since it was last
+written". GRUB boots a proven slot outright and writes nothing; only an
+**unproven** slot is put on probation (`<SLOT>_TRY=1`, one attempt, then the
+other slot). `ab-slot-pending.sh` — RAUC's `post-install` handler, so it runs for
+`rauc install` by hand as well as for `ab-update` — sets `_PROVEN=0` on the slot
+an update has just written, and `ab-mark-good` sets it back to 1 once that slot
+boots.
+
+The counter used to be armed on *every* boot, so every boot needed blessing
+before the next reboot, forever — and a machine merely rebooted before
+`ab-mark-good` ran came up on the other slot, then did the same in reverse,
+alternating for the rest of its life. Arming only what has actually changed is
+what Android (`successful`/`tries_remaining`), ChromeOS (`cgpt`
+`successful`/`tries`) and systemd-boot (`entry+N-M.conf`) all do; RAUC's
+reference GRUB integration, which this project originally followed, arms every
+boot. A side effect worth having: between updates nothing writes to `/boot` at
+all.
+
+**When a slot is marked good.** `ab-mark-good` runs **before logins are
+permitted** (`Before=systemd-user-sessions.service`), which makes the rule *if
+you can log in, this slot is already marked good*. It is not ordered after
 `multi-user.target`, which is where it used to sit: that put it ~90 seconds into
-boot against a login prompt at ~38 seconds, so anyone who logged in and rebooted
-in between came back on the other slot — and since that boot left its own counter
-armed too, the machine then alternated slots on every reboot. The trade is that a
-boot which reaches a login prompt and later fails a service no longer rolls back
-by itself; everything rollback exists for (kernel, initramfs, root filesystem,
-emergency) happens earlier and is still covered.
-`scripts/test-slot-stability.sh` holds the line.
+boot against a login prompt at ~38 seconds, and rebooting in between was enough
+to trigger the fallback. The trade is that a boot which reaches a login prompt
+and later fails a service no longer rolls back by itself; everything rollback
+exists for (kernel, initramfs, root filesystem, emergency) happens earlier and is
+still covered. `boot-complete.target` exists in systemd for hanging real health
+checks off, if this ever needs to be stricter than "it booted".
+
+`scripts/test-slot-stability.sh` holds both ends of this: that a healthy machine
+never changes slot on its own, **and** that an update which boots but fails to
+mark good still falls back. Arming less is only safe if what remains still
+catches a bad update.
 
 ### Writable state
 

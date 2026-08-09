@@ -1,11 +1,16 @@
 #!/bin/bash
-# Mark the booted A/B slot as good by resetting its GRUB try counter.
+# Mark the booted A/B slot as proven, so the next boot does not put it on
+# probation.
 #
-# grub.cfg sets <SLOT>_TRY=1 when it picks a slot; if nothing resets it, the
-# next boot skips this slot and falls through to the other one. Running this
-# once the system reaches multi-user restores the counter, which is exactly
-# what RAUC's "rauc status mark-good" would do — but without depending on the
-# RAUC daemon being configured.
+# grub.cfg puts a slot on probation only while <SLOT>_PROVEN is 0 -- which is
+# what ab-slot-pending.sh sets on the slot an update has just written. It then
+# sets <SLOT>_TRY=1 for that one boot, and if nothing clears it the next boot
+# falls through to the other slot. This clears it and records that the slot has
+# now booted, which is roughly what "rauc status mark-good" would do, without
+# depending on the RAUC daemon being configured.
+#
+# On a slot that is already proven this does nothing at all, so between updates
+# neither this nor grub.cfg writes to /boot.
 set -u
 
 GRUBENV=/boot/grub/grubenv
@@ -37,10 +42,21 @@ if [ ! -s "$GRUBENV" ]; then
     exit 1
 fi
 
-# _OK as well as _TRY: the try counter is what GRUB falls back on, and _OK is
-# what RAUC reads to decide whether a slot is usable at all. Setting only the
-# counter leaves RAUC convinced every slot is bad.
-if ! grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1"; then
+# Nothing to do on a slot that is already proven, which after the first boot
+# following an update is every boot. Skipping the write keeps an ordinary boot
+# from touching /boot at all -- grub.cfg no longer writes either -- so the
+# shared BOOT partition is read-only in practice between updates.
+if [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_PROVEN=//p")" = "1" ] &&
+   [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_TRY=//p")" = "0" ]; then
+    echo "ab-mark-good: slot $SLOT was already proven; nothing to do"
+    exit 0
+fi
+
+# _PROVEN is what stops the next boot putting this slot on probation again;
+# _TRY clears the probation this boot was under; _OK is what RAUC reads to
+# decide a slot is usable at all, and setting only the counter leaves RAUC
+# convinced every slot is bad.
+if ! grub-editenv "$GRUBENV" set "${SLOT}_TRY=0" "${SLOT}_OK=1" "${SLOT}_PROVEN=1"; then
     echo "ab-mark-good: could not write $GRUBENV (is /boot read-only?)" >&2
     echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
     exit 1
@@ -51,9 +67,11 @@ fi
 # that still exit 0 -- and the symptom of believing a failed write is a machine
 # that changes slots by itself on the next reboot, which is not a thing anyone
 # traces back to here.
-if [ "$(grub-editenv "$GRUBENV" list 2>/dev/null | sed -n "s/^${SLOT}_TRY=//p")" != "0" ]; then
-    echo "ab-mark-good: ${SLOT}_TRY did not stick after writing $GRUBENV" >&2
+_after="$(grub-editenv "$GRUBENV" list 2>/dev/null)"
+if [ "$(printf '%s\n' "$_after" | sed -n "s/^${SLOT}_TRY=//p")" != "0" ] ||
+   [ "$(printf '%s\n' "$_after" | sed -n "s/^${SLOT}_PROVEN=//p")" != "1" ]; then
+    echo "ab-mark-good: ${SLOT}_TRY/${SLOT}_PROVEN did not stick after writing $GRUBENV" >&2
     echo "ab-mark-good: the try counter is still armed; the next boot will use the other slot" >&2
     exit 1
 fi
-echo "ab-mark-good: slot $SLOT marked good (${SLOT}_TRY=0)"
+echo "ab-mark-good: slot $SLOT marked good and proven (${SLOT}_TRY=0 ${SLOT}_PROVEN=1)"
