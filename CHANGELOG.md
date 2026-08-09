@@ -4,6 +4,31 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Machines can be named in the provisioning assignment.** An image cannot carry
+a hostname — every machine written from it would answer to the same one — so the
+only way to name a machine was to log in after imaging and set it by hand. That
+is manual per-machine state on a fleet whose premise is that machines are
+interchangeable, and on this project it was also the sequence that walked an
+operator into the boot-counter bug fixed earlier in this release.
+
+The assignment gains a **Hostname** field next to the existing (cosmetic) label.
+It travels assignment → `/hosts/<mac>.ipxe` → `imager.hostname=` → the imager →
+`/boot/ab-deploy.json` → `machine-identity.service`, so nothing is configured on
+the machine and nobody logs in afterwards.
+
+It is stored with the machine-id and SSH host keys on the overlay partition
+rather than only in `/etc/hostname`: `/etc` is part of the root, so an image
+could ship a file that shadows it, and under `--slot-private-upper` a name set
+in slot A would not exist in slot B. Re-applied every boot, so it is right in
+both slots and survives updates. `/etc/hosts` gets the matching `127.0.1.1`
+entry, without which `sudo` waits on a resolution timeout.
+
+Names are refused rather than sanitised — `web 01` would split into a second
+kernel parameter, and a name in the UI that differs from the name on the machine
+is found by whoever cannot resolve it. Duplicates are refused
+case-insensitively. Blank keeps the image's own name, so nothing changes for
+anyone not using it.
+
 **Health checks decide whether an update is kept.** Drop an executable in
 `/etc/ab/health.d/` (via `overlay.d`) and it runs before logins are permitted;
 if any check fails the slot is never marked good and the next boot rolls back to

@@ -5,7 +5,7 @@ import { api, apiError } from "../lib/api";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Alert } from "../components/ui";
 
-interface Assignment { mac: string; image: string; action: string; name: string; }
+interface Assignment { mac: string; image: string; action: string; name: string; hostname: string; }
 interface Iface { name: string; ip: string; prefixlen: number; network: string; netmask: string; mac: string; up: boolean; carrier: boolean; default: boolean; }
 interface Suggestion { SERVER_IP?: string; prefixlen?: number; DHCP_NETMASK?: string; PROXY_SUBNET?: string; DHCP_RANGE_START?: string; DHCP_RANGE_END?: string; }
 
@@ -43,7 +43,7 @@ export default function Provisioning() {
     } catch (e) { toast.error(apiError(e)); }
   }
   const addAssignment = (mac = "") =>
-    setAssign((a) => [...a, { mac, image: images[0] || "", action: "", name: "" }]);
+    setAssign((a) => [...a, { mac, image: images[0] || "", action: "", name: "", hostname: "" }]);
   const setAssignment = (i: number, k: keyof Assignment, v: string) =>
     setAssign((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const removeAssignment = (i: number) => setAssign((a) => a.filter((_, j) => j !== i));
@@ -297,7 +297,8 @@ export default function Provisioning() {
           ) : (
             <table className="w-full text-left text-sm">
               <thead><tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
-                <th className="px-2 py-2">MAC address</th><th className="px-2 py-2">Label</th>
+                <th className="px-2 py-2">MAC address</th><th className="px-2 py-2">Hostname</th>
+                <th className="px-2 py-2">Label</th>
                 <th className="px-2 py-2">Image</th><th className="px-2 py-2">After imaging</th><th />
               </tr></thead>
               <tbody className="divide-y divide-zinc-800/70">
@@ -305,6 +306,13 @@ export default function Provisioning() {
                   <tr key={i}>
                     <td className="px-2 py-2"><Input className="font-mono text-xs" value={a.mac} placeholder="00:11:22:33:44:55"
                       onChange={(e) => setAssignment(i, "mac", e.target.value)} /></td>
+                    {/* The machine's actual name, applied at imaging time. An
+                        image cannot carry it -- every machine written from one
+                        image would answer to the same thing. Blank keeps
+                        whatever the image was built with. */}
+                    <td className="px-2 py-2"><Input className="font-mono text-xs" value={a.hostname ?? ""}
+                      placeholder="web01" spellCheck={false}
+                      onChange={(e) => setAssignment(i, "hostname", e.target.value)} /></td>
                     <td className="px-2 py-2"><Input value={a.name} placeholder="optional"
                       onChange={(e) => setAssignment(i, "name", e.target.value)} /></td>
                     <td className="px-2 py-2"><Select value={a.image} onChange={(e) => setAssignment(i, "image", e.target.value)}>

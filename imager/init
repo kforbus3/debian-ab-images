@@ -66,6 +66,11 @@ WIPE="$(getarg imager.wipe 0)"
 # Reporting is best-effort by design: a machine that cannot reach the server
 # must still image itself, so every call is backgrounded, time-limited and its
 # failure ignored. Nothing here can block or fail the imaging run.
+# The name this machine is to answer to, assigned per MAC in the web UI and
+# passed on the kernel command line. Empty means the image's own hostname
+# stands, which is what every machine did before this existed.
+ASSIGNED_HOSTNAME="$(getarg imager.hostname '')"
+
 REPORT_URL="$(getarg imager.report '')"
 if [ -z "$REPORT_URL" ]; then
     # Default to the host serving the image, which is the provisioning server in
@@ -287,8 +292,8 @@ leave_checkin_marker() {
     [ -b "$_part" ] || return 0
     $BB mkdir -p /mnt/bootpart 2>/dev/null || return 0
     $BB mount -t ext4 "$_part" /mnt/bootpart 2>/dev/null || return 0
-    printf '{"checkin_url":"%s","image":"%s","id":"%s"}\n' \
-        "$_url" "$IMG_URL" "$CLIENT_ID" > /mnt/bootpart/ab-deploy.json 2>/dev/null || true
+    printf '{"checkin_url":"%s","image":"%s","id":"%s","hostname":"%s"}\n' \
+        "$_url" "$IMG_URL" "$CLIENT_ID" "$ASSIGNED_HOSTNAME" > /mnt/bootpart/ab-deploy.json 2>/dev/null || true
     $BB sync
     $BB umount /mnt/bootpart 2>/dev/null || true
 }

@@ -131,6 +131,38 @@ The web UI generates those per-host scripts from `output/hosts/assignments.json`
 and regenerates them whenever the server IP or an assignment changes. Nothing is
 configured on the machines themselves.
 
+### Naming machines
+
+An image cannot carry a hostname: every machine written from it would answer to
+the same one. `--hostname` at build time sets the *image's* name, which is the
+right default for a fleet of interchangeable machines and wrong the moment you
+need to tell them apart.
+
+Set a **Hostname** on the assignment instead. It travels the same path as the
+image does — assignment → the machine's `/hosts/<mac>.ipxe` → `imager.hostname=`
+on the kernel command line → `/boot/ab-deploy.json` → `machine-identity.service`
+on first boot — so nothing is configured on the machine itself and nobody has to
+log in afterwards to type it.
+
+It is stored alongside the machine-id and SSH host keys on the overlay
+partition, not merely written to `/etc/hostname`. That matters twice: `/etc` is
+part of the root, so an image could later ship a file that shadows it, and on an
+image built with `--slot-private-upper` a name set while running slot A would
+not exist in slot B. Re-applied from that store on every boot, it is correct in
+both slots and survives updates. `/etc/hosts` gets the matching `127.0.1.1`
+entry, without which `sudo` waits on a name-resolution timeout.
+
+Leave it blank and the machine keeps whatever the image was built with.
+
+Names are validated, not corrected: `web 01`, `-web01` and `web_01` are refused
+rather than quietly reshaped, because a name in the UI that differs from the
+name on the machine is discovered by whoever cannot resolve it. Two machines
+cannot be given the same name, case-insensitively.
+
+Re-imaging rewrites the whole disk, overlay included, so a machine adopts
+whatever name its assignment carries at that point — re-imaging is how you
+change what a machine is.
+
 ## Imaging machines
 
 1. Build the image and imager (`make image`, `make imager`).
