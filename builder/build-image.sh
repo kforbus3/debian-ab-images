@@ -985,6 +985,7 @@ chmod +x "$MNT/usr/local/sbin/first-boot-expand.sh" "$MNT/usr/local/sbin/luks-en
          "$MNT/usr/local/sbin/ab-overlay-diff.sh" "$MNT/usr/local/sbin/ab-checkin.sh" \
          "$MNT/usr/local/sbin/ab-update.sh" "$MNT/usr/local/sbin/ab-sync-boot.sh" \
          "$MNT/usr/local/sbin/ab-slot-pending.sh" \
+         "$MNT/usr/local/sbin/ab-health-check.sh" \
          "$MNT/usr/local/sbin/ab-kernel-hook.sh"
 # The others are only ever run by systemd; this one is run by a person, so it
 # gets a name without the extension and a place on the default PATH.
@@ -1050,8 +1051,15 @@ chmod 0755 "$MNT/usr/sbin/update-grub"
 install -m0755 "$OVERLAY_DIR/usr/local/sbin/ab-kernel-hook.sh" \
     "$MNT/etc/kernel/postinst.d/zz-ab-kernel-notice"
 
+# ab-health-check is WantedBy=boot-complete.target, which ab-mark-good Requires
+# -- so enabling it is what makes the checks gate the blessing. With no checks
+# installed it passes immediately and nothing changes.
 chroot "$MNT" systemctl enable first-boot-expand.service ab-mark-good.service \
+                                ab-health-check.service \
                                 machine-identity.service ab-checkin.service
+# The directory is part of the image's layout, so a check dropped in through
+# overlay.d has somewhere to land and `ls` on a running machine answers "none".
+install -d -m755 "$MNT/etc/ab/health.d"
 
 # RAUC only installs bundles signed by a certificate in this keyring, and the
 # keyring is baked into the image -- so a machine can never be updated by a

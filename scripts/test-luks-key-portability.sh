@@ -46,8 +46,43 @@ for n in 1 2; do
     mknod "${LO}p$n" b "$mj" "$mn"
 done
 
+# --- make the BOOT label findable, and prove it before testing anything ------
+#
+# The script under test finds the partition with `blkid -t LABEL=BOOT`, and
+# blkid answers from a cache. losetup -P scans the partitions the moment they
+# appear -- before mkfs has written a label -- so the cache can hold a
+# label-less entry for this very device, and blkid then reports no BOOT
+# partition at all. The script does the right thing with that (warns, falls back
+# to a passphrase prompt, exits 0) and the test records two failures that look
+# like the product is broken when nothing about it changed.
+#
+# That is exactly the trap test-state-directives.sh documents for `blkid -L
+# overlay`. Same fix here: drop the cache, then assert the lookup resolves to
+# the device this test just made, so a future recurrence is reported as a
+# harness fault instead of a product one.
+blkid_cache_clear() { rm -f /run/blkid/blkid.tab /run/blkid/blkid.tab.old /etc/blkid.tab 2>/dev/null; }
+
+resolve_boot() {                # resolve_boot -> device, or empty
+    local i found
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        blkid_cache_clear
+        found="$(blkid -l -t LABEL=BOOT -o device 2>/dev/null)"
+        [ -n "$found" ] && { echo "$found"; return 0; }
+        sleep 0.3
+    done
+    return 1
+}
+
 # The BOOT partition as build-image.sh writes it.
 mkfs.ext4 -q -L BOOT "${LO}p1"
+blkid_cache_clear
+BOOTFOUND="$(resolve_boot || true)"
+if [ "$BOOTFOUND" != "${LO}p1" ]; then
+    echo "HARNESS-FAIL: blkid -t LABEL=BOOT = '${BOOTFOUND:-nothing}', expected ${LO}p1."
+    echo "  The label is not visible, so the script under test cannot find it either."
+    echo "  This is the harness, not ab-luks-key."
+    exit 1
+fi
 head -c 4096 /dev/urandom > "$WORK/machine.key"
 mkdir -p /mnt/ktb && mount "${LO}p1" /mnt/ktb
 install -d -m700 /mnt/ktb/ab-keys
@@ -65,6 +100,7 @@ printf 'log_warning_msg() { echo "W: $*"; }\n' > /scripts/functions
 echo "== the initramfs fetches this machine's key =="
 rm -rf /cryptkey
 printf 'luks-rootfs-a PARTLABEL=rootfs-a /cryptkey/luks.key luks,discard,initramfs\n' > /cryptroot/crypttab
+blkid_cache_clear
 sh "$IT/scripts/init-premount/ab-luks-key" >/dev/null 2>&1
 if [ -f /cryptkey/luks.key ]; then
     pass "key placed at /cryptkey/luks.key"
@@ -87,6 +123,7 @@ echo "== it does nothing once enrolment has moved crypttab to clevis =="
 # bootstrap keyslot only after a boot that did not use the bootstrap key.
 rm -rf /cryptkey
 printf 'luks-rootfs-a PARTLABEL=rootfs-a none luks,discard,initramfs\n' > /cryptroot/crypttab
+blkid_cache_clear
 sh "$IT/scripts/init-premount/ab-luks-key" >/dev/null 2>&1
 [ -f /cryptkey/luks.key ] && bad "placed a key crypttab no longer asks for" \
     || pass "no key placed"
@@ -95,6 +132,7 @@ echo "== a missing key degrades to a prompt, not to an initramfs shell =="
 rm -rf /cryptkey
 mount "${LO}p1" /mnt/ktb && rm -f /mnt/ktb/ab-keys/luks.key && umount /mnt/ktb
 printf 'luks-rootfs-a PARTLABEL=rootfs-a /cryptkey/luks.key luks,discard,initramfs\n' > /cryptroot/crypttab
+blkid_cache_clear
 out=$(sh "$IT/scripts/init-premount/ab-luks-key" 2>&1); rc=$?
 [ "$rc" = 0 ] && pass "exits 0 so the boot continues to a passphrase prompt" \
     || bad "exit $rc would abort the boot"

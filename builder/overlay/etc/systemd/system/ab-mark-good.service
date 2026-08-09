@@ -31,6 +31,18 @@ Description=Mark booted A/B slot as good (reset GRUB try counter)
 # actually for -- an unbootable kernel, a broken initramfs, a root filesystem
 # that will not mount, a drop to emergency -- happens before this point and is
 # still covered.
+#
+# boot-complete.target is systemd's own "the boot succeeded" synchronisation
+# point, and Requires= means a failed health check leaves this unit unrun --
+# the slot is not blessed, and an update that got this far is rolled back on
+# the next boot. With no checks installed the target is reached immediately, so
+# the default behaviour is unchanged: booting far enough to permit logins is
+# itself the check.
+#
+# The target is ordered before logins too (see ab-health-check.service), so
+# adding checks does not reopen the window this unit was moved to close.
+Requires=boot-complete.target
+After=boot-complete.target
 After=local-fs.target boot.mount
 Before=systemd-user-sessions.service
 RequiresMountsFor=/boot

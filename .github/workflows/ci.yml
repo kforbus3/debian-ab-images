@@ -267,7 +267,11 @@ jobs:
           # rollback is the counterweight: arming the counter only for updates
           # must not quietly remove the fallback. It stages what an update
           # stages, makes the new slot unhealthy, and asserts B -> A.
-          for mode in poweroff early-reboot rollback; do
+          # health-fail proves the health-check gate is not decorative. It
+          # shipped once as WantedBy=boot-complete.target, which is a Wants=
+          # -- a failing check left the target `active`, the slot was blessed
+          # anyway and nothing rolled back. Only a boot showed that.
+          for mode in poweroff early-reboot rollback health-fail; do
             docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
               -e SRC=/output/ovl-test.img -e ARCH=amd64 -e "MODE=$mode" -e BOOT_TIMEOUT=600 \
               --entrypoint bash debian-ab-builder:amd64 /s/test-slot-stability.sh \
