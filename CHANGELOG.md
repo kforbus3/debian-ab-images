@@ -4,6 +4,30 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Fixed: a killed build poisoned every build after it.** `Device luks-rootfs-a
+already exists.` The builder opened its LUKS volumes under the same mapper names
+the *installed system* uses, so a build that died before its cleanup trap ran
+left those mappings in the kernel and every later encrypted build failed on the
+first one.
+
+Worse than an annoyance: building an image on a machine that is itself an A/B
+system would have collided with that machine's own live root mapping, and the
+cleanup would then have closed it.
+
+Build-time mappings are now `abbuild-<random>-{a,b,ovl}`, unique per build and
+distinct from the installed system's names, which stay fixed in `crypttab` and
+`rauc/system.conf` where they have to be stable. Random rather than `$$`:
+containers share the host's device-mapper namespace and two concurrent builds
+are quite likely to both be PID 7.
+
+Clearing a stale mapping by hand, if one is left over from an older build:
+
+```bash
+for m in luks-rootfs-a luks-rootfs-b luks-overlay; do
+  sudo cryptsetup close "$m" 2>/dev/null || true
+done
+```
+
 **Fixed: every machine reported itself as `unknown-1`.** The imager derives its
 identity from the MAC of the interface that took the DHCP lease — that is what
 the DHCP server and the iPXE menu know the machine by, so the UI can join a
