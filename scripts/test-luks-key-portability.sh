@@ -76,13 +76,48 @@ resolve_boot() {                # resolve_boot -> device, or empty
 # The BOOT partition as build-image.sh writes it.
 mkfs.ext4 -q -L BOOT "${LO}p1"
 blkid_cache_clear
-BOOTFOUND="$(resolve_boot || true)"
-if [ "$BOOTFOUND" != "${LO}p1" ]; then
-    echo "HARNESS-FAIL: blkid -t LABEL=BOOT = '${BOOTFOUND:-nothing}', expected ${LO}p1."
-    echo "  The label is not visible, so the script under test cannot find it either."
-    echo "  This is the harness, not ab-luks-key."
-    exit 1
+# --- make the label lookup deterministic ------------------------------------
+#
+# `blkid -t LABEL=BOOT` is a question about the whole machine, and a CI runner's
+# root disk usually has its own partition labelled BOOT -- GitHub's answers
+# /dev/nvme0n1p16. So the script under test would go looking at the runner's
+# disk instead of this test's, which is what made this test fail intermittently
+# on unrelated changes. It is not something ab-luks-key can do anything about:
+# on a real machine being imaged, its own BOOT partition is the only one.
+#
+# A shim on PATH, applied unconditionally. Conditionally shimming would mean the
+# test exercises a different path depending on what the host's disk happens to
+# be called, which is how a flake survives being "fixed". The script still calls
+# blkid with exactly the arguments it always did, and everything downstream --
+# mounting, copying the key, the mode, the umount -- is the real thing against a
+# real filesystem on a real loop device.
+NATIVE="$(resolve_boot || true)"
+if [ "$NATIVE" = "${LO}p1" ]; then
+    echo "  note: blkid resolves LABEL=BOOT to this test's partition natively"
+else
+    echo "  note: this host has its own LABEL=BOOT (${NATIVE:-none}); the shim below"
+    echo "        is what keeps this test about ab-luks-key rather than about the host"
 fi
+SHIM="$WORK/bin"; mkdir -p "$SHIM"
+REAL_BLKID="$(command -v blkid)"
+cat > "$SHIM/blkid" <<SHIMEOF
+#!/bin/sh
+# Answer the script's own lookup with this test's partition; delegate the rest.
+for a in "\$@"; do
+    case "\$a" in
+        LABEL=BOOT|PARTLABEL=BOOT) echo "${LO}p1"; exit 0;;
+    esac
+done
+exec "$REAL_BLKID" "\$@"
+SHIMEOF
+chmod +x "$SHIM/blkid"
+PATH="$SHIM:$PATH"; export PATH
+BOOTFOUND="$(blkid -l -t LABEL=BOOT -o device 2>/dev/null)"
+[ "$BOOTFOUND" = "${LO}p1" ] || {
+    echo "HARNESS-FAIL: the shimmed lookup returned '${BOOTFOUND:-nothing}'"
+    exit 1
+}
+
 head -c 4096 /dev/urandom > "$WORK/machine.key"
 mkdir -p /mnt/ktb && mount "${LO}p1" /mnt/ktb
 install -d -m700 /mnt/ktb/ab-keys
