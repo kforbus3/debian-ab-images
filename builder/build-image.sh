@@ -548,12 +548,29 @@ if [ "$ENCRYPT" = true ]; then
             printf '%s' "$LUKS_PASS" | cryptsetup luksAddKey $PBKDF_OPTS --key-file=- "$1" "$KEYDIR/keyfile"
         fi
     }
-    luks_setup "$P_A"   luks-rootfs-a rootfs-a
-    luks_setup "$P_B"   luks-rootfs-b rootfs-b
-    luks_setup "$P_OVL" luks-overlay  overlay
-    DEV_A=/dev/mapper/luks-rootfs-a
-    DEV_B=/dev/mapper/luks-rootfs-b
-    DEV_OVL=/dev/mapper/luks-overlay
+    # Build-time mapper names, unique to this build. NOT the names the installed
+    # system uses -- those are fixed (luks-rootfs-a and friends) and written
+    # into crypttab and rauc/system.conf further down, where they have to be
+    # stable. These only exist while the builder is writing the image.
+    #
+    # They used to be the same names, which failed two ways. A build killed
+    # before its cleanup trap ran left the mappings behind, and every later
+    # build died on "Device luks-rootfs-a already exists." Worse, building an
+    # image on a machine that is itself an A/B system would collide with that
+    # machine's own live root mapping -- and the cleanup would then close it.
+    #
+    # Random rather than $$: containers share the host's device-mapper
+    # namespace, and two concurrent builds are quite likely to both be PID 7.
+    MAPTAG="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    for _m in "abbuild-${MAPTAG}-a" "abbuild-${MAPTAG}-b" "abbuild-${MAPTAG}-ovl"; do
+        [ -e "/dev/mapper/$_m" ] && die "mapper $_m already exists; rerun the build"
+    done
+    luks_setup "$P_A"   "abbuild-${MAPTAG}-a"
+    luks_setup "$P_B"   "abbuild-${MAPTAG}-b"
+    luks_setup "$P_OVL" "abbuild-${MAPTAG}-ovl"
+    DEV_A="/dev/mapper/abbuild-${MAPTAG}-a"
+    DEV_B="/dev/mapper/abbuild-${MAPTAG}-b"
+    DEV_OVL="/dev/mapper/abbuild-${MAPTAG}-ovl"
 fi
 
 step "Formatting filesystems"
