@@ -20,12 +20,18 @@ export default function Provisioning() {
   const [problems, setProblems] = useState<string[]>([]);
   const [advanced, setAdvanced] = useState(false);
   const [assign, setAssign] = useState<Assignment[]>([]);
+  // Which imager.* parameters the built imager understands. Empty means an
+  // imager built before it started saying, which is "unknown" -- not "supports
+  // nothing", or every older imager would draw a warning about a feature it may
+  // well have.
+  const [imagerFeatures, setImagerFeatures] = useState<string[] | null>(null);
   const [suggest, setSuggest] = useState<Suggestion>({});
 
   async function loadAll() {
     try {
       const [c, s, im] = await Promise.all([api.get("/server/config"), api.get("/server/status"), api.get("/images")]);
       setCfg(c.data); setRunning(s.data.running); setImages(im.data.images.map((x: any) => x.name));
+      setImagerFeatures(im.data.imager_features ?? null);
     } catch (e) { toast.error(apiError(e)); }
     api.get("/server/interfaces").then((r) => { setIfaces(r.data.interfaces); setSuggest(r.data.suggestion || {}); }).catch(() => {});
     api.get("/server/preflight").then((r) => setProblems(r.data.problems)).catch(() => {});
@@ -289,6 +295,22 @@ export default function Provisioning() {
                 to machines booting now.</span>}
             </p>
           </div>
+          {/* The imager is a build artifact: `init` is baked into its
+              initramfs, so a hostname assigned here does nothing until the
+              imager itself is rebuilt. An older imager ignores parameters it
+              does not know -- correctly -- so the machine images perfectly and
+              comes up with the image's own name, which reads as the UI having
+              dropped the field. Say so where the field is. */}
+          {imagerFeatures && imagerFeatures.length > 0 &&
+           !imagerFeatures.includes("hostname") &&
+           assign.some((a) => (a.hostname || "").trim()) && (
+            <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              The built imager does not understand <code>imager.hostname</code>, so the
+              hostnames below will be ignored and machines will boot with the name their
+              image was built with. Rebuild it with <code>make imager</code> — the imager
+              is a separate artifact and pulling the repo does not update it.
+            </p>
+          )}
           {assign.length === 0 ? (
             <p className="py-6 text-center text-sm text-zinc-500">
               No per-machine targeting — every machine that boots gets{" "}

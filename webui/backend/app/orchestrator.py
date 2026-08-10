@@ -899,6 +899,33 @@ def imager_arches() -> dict[str, bool]:
     return {"amd64": built(base), "arm64": built(os.path.join(base, "arm64"))}
 
 
+def imager_features() -> list[str]:
+    """Which imager.* parameters the built imager understands.
+
+    The imager is a build artifact -- `init` is baked into the initramfs -- so a
+    repo that has grown a new parameter does nothing until someone rebuilds it.
+    An older imager ignores parameters it does not know, exactly as it should,
+    so the machine images perfectly and quietly does not do the new thing. That
+    is indistinguishable from the web UI having dropped the field, which is how
+    it was reported.
+
+    Empty for an imager built before this stamp existed; callers must treat that
+    as "unknown", not as "supports nothing", or every older imager would draw a
+    warning about a feature it may well have.
+    """
+    for sub in ("", "arm64"):
+        path = os.path.join(settings.output_dir, "imager", sub, "build.json")
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        feats = data.get("features")
+        if isinstance(feats, list):
+            return [str(x) for x in feats]
+    return []
+
+
 def delete_image(name: str) -> None:
     if "/" in name or ".." in name:
         raise ValueError("invalid name")
