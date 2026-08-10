@@ -79,13 +79,50 @@ if [ -z "$REPORT_URL" ]; then
 fi
 
 # A machine needs a stable identity across the phases it reports. The MAC of the
-# interface that carries the default route is the same thing the DHCP server and
-# the iPXE menu know it by, so the UI can line them up without a lookup table.
-CLIENT_ID="$($BB cat /sys/class/net/*/address 2>/dev/null | $BB grep -v '00:00:00:00:00:00' | $BB head -1)"
-[ -n "$CLIENT_ID" ] || CLIENT_ID="unknown-$$"
+# interface that got the DHCP lease is the same thing the DHCP server and the
+# iPXE menu know it by, so the UI can line them up without a lookup table.
+#
+# Resolved after the network is up, NOT here. This used to be computed at this
+# point in the script -- before any network driver had been modprobed -- so the
+# only interface that existed was lo, whose address is all zeroes and is
+# filtered out. Every machine therefore fell back to "unknown-$$", and since
+# /init is PID 1 that is "unknown-1" on every machine in the fleet: every
+# machine reporting under one identity, overwriting each other in the UI.
+#
+# It was invisible because neither consumer worked. The reports 404'd (no /api
+# route on the provisioning server) and the check-in marker was never written
+# (the imager could not mount ext4), so nothing ever displayed the id.
+CLIENT_ID=""
+
+resolve_client_id() {
+    [ -n "$CLIENT_ID" ] && return 0
+    # The interface that actually took a lease, when there is one.
+    if [ -n "${NET_DEV:-}" ] && [ -r "/sys/class/net/$NET_DEV/address" ]; then
+        CLIENT_ID="$($BB cat "/sys/class/net/$NET_DEV/address" 2>/dev/null)"
+    fi
+    # Otherwise any real interface -- but only ones that exist by now.
+    if [ -z "$CLIENT_ID" ]; then
+        for _d in $($BB ls /sys/class/net 2>/dev/null); do
+            [ "$_d" = lo ] && continue
+            _a="$($BB cat "/sys/class/net/$_d/address" 2>/dev/null)"
+            case "$_a" in ""|00:00:00:00:00:00) continue;; esac
+            CLIENT_ID="$_a"; break
+        done
+    fi
+    # Last resort. Distinct per machine only by luck, so say so rather than
+    # letting a whole fleet quietly share one row in the UI.
+    if [ -z "$CLIENT_ID" ]; then
+        CLIENT_ID="unknown-$$"
+        say "WARNING: no MAC address found; reporting as '$CLIENT_ID'. Every machine"
+        say "         doing this reports under the same identity."
+    fi
+}
 
 report() {   # report <phase> <percent> [detail]
     [ -n "$REPORT_URL" ] || return 0
+    # Lazily, so a failure reported before the network is up still carries
+    # whatever identity is available rather than an empty one.
+    resolve_client_id
     _p="$1"; _pct="${2:-}"; _d="${3:-}"
     (
         if ! $BB wget -q -T 3 -O /dev/null --post-data \
@@ -139,11 +176,16 @@ for dev in $($BB ls /sys/class/net); do
     # Only accept the interface if it actually received an IPv4 address.
     if $BB ip -4 addr show "$dev" 2>/dev/null | $BB grep -q "inet "; then
         GOT_IP=1
+        NET_DEV="$dev"
         say "Network up on $dev: $($BB ip -o -4 addr show "$dev" | $BB awk '{print $4}')"
         break
     fi
 done
 [ "$GOT_IP" = 1 ] || die "DHCP failed on all interfaces (no IPv4 lease applied)"
+
+# Now that an interface exists and has a lease, this machine has an identity.
+resolve_client_id
+say "Reporting as $CLIENT_ID"
 
 # --- Choose the target disk ---
 if [ -z "$TARGET" ]; then

@@ -4,6 +4,28 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Fixed: every machine reported itself as `unknown-1`.** The imager derives its
+identity from the MAC of the interface that took the DHCP lease — that is what
+the DHCP server and the iPXE menu know the machine by, so the UI can join a
+machine's imaging progress to its later check-in without a lookup table.
+
+It was computed at the top of `init`, *before* any network driver had been
+modprobed. The only interface in existence at that point is `lo`, whose address
+is all zeroes and is filtered out, so the lookup found nothing and fell through
+to `unknown-$$` — and since `/init` is PID 1, that is `unknown-1` on every
+machine. A whole fleet would have reported under one identity, collapsing into a
+single row in the UI and overwriting each other.
+
+Nothing showed it because neither consumer worked: the reports 404'd and the
+check-in marker was never written. Fixing those is what would have made a fleet
+of machines all appear as one.
+
+The identity is now resolved after the network is up, preferring the interface
+that actually took a lease. If no MAC can be found at all it still falls back,
+but says so on the console rather than letting machines quietly share an id. The
+imager prints `Reporting as <mac>`, and `test-imager-e2e.sh` asserts the id in
+the marker is a MAC.
+
 **Fixed: the imager could never mount ext4, so no machine has ever left a
 check-in marker.** `EXT4-fs: Cannot load crc32c driver.` ext4 uses crc32c for
 metadata checksums and requests it at *runtime* through the crypto API, not as a
