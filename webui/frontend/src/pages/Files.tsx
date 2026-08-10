@@ -32,13 +32,27 @@ export default function Files() {
             untouched, so shipping one netplan file does not remove the machine's others.
           </p>
           <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Whole folders
+          </h3>
+          <p>
+            <em>Choose a folder…</em> uploads everything beneath it, keeping the tree. You
+            pick the destination and whether the folder's own name is part of the path, and
+            the exact list of destinations is shown before anything is sent. Editor and OS
+            droppings (<code className="text-zinc-300">.DS_Store</code>,{" "}
+            <code className="text-zinc-300">.git/</code>) are skipped and counted rather
+            than quietly included. Empty directories are not uploaded — a browser does not
+            report them, and the builder copies files.
+          </p>
+          <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Permissions are part of the file
           </h3>
           <p>
             The mode is preserved into the image, so a script shipped
             <code className="mx-1 text-zinc-300">0644</code> is a script that does not run
             on the machine. Use the mode button in the list, or set it explicitly when
-            editing.
+            editing. A browser cannot read a file's permissions, so uploads arrive
+            <code className="mx-1 text-zinc-300">0644</code> unless the path is one that is
+            usually executable — worth checking after uploading a folder of scripts.
           </p>
           <h3 className="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">
             What does not belong here

@@ -2,6 +2,35 @@
 
 Notable changes per release. Dates are the tag date.
 
+## Unreleased
+
+**Whole folders can be uploaded to the image files.** *Choose a folder…* on the
+Image Files page takes everything beneath it and keeps the tree. Previously the
+only way to ship a directory was one file at a time, or a shell on the host —
+the gap that page exists to close.
+
+You pick the destination and whether the folder's own name forms part of the
+path (`etc/` → `/etc/hosts`, or strip the wrapper and land its contents
+directly), and **the exact list of destinations is shown before anything is
+sent** — that mapping is the part that is easy to get wrong, and a folder
+landing one directory off is discovered by a machine behaving oddly rather than
+by an error.
+
+Each file goes through the same upload endpoint a single file does, so
+everything that keeps a path inside `overlay.d` is unchanged; a bulk endpoint
+would have been a second way in to the one place in this app where a browser's
+path reaches `open()`. Failures are named per file rather than counted.
+
+`.DS_Store`, `Thumbs.db`, `.gitkeep` and `.git/` trees are skipped and *counted
+in the preview* rather than quietly dropped. There are limits on file count and
+total size, because a mis-picked home directory is a real hazard. Empty
+directories are not uploaded: a browser does not report them and the builder
+copies files.
+
+A browser cannot read file permissions, so uploads arrive `0644` unless the path
+is one that is usually executable. The panel says so — a folder of scripts that
+silently does not run is the failure this avoids.
+
 ## v0.6.0 — 2026-08-09
 
 Two features, and a chain of imaging bugs that one bug report pulled apart.

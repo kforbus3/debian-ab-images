@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { FilePlus, Upload, Trash2, Pencil, Download, RefreshCw, Save, X, CornerUpRight } from "lucide-react";
+import { FilePlus, Upload, FolderUp, Trash2, Pencil, Download, RefreshCw, Save, X, CornerUpRight } from "lucide-react";
 import { api, apiError, fmtBytes } from "../lib/api";
 import { useToast } from "./Toast";
 import { Button, Input, Label, Badge, Alert } from "./ui";
+import { planDirUpload, MAX_DIR_FILES, MAX_DIR_BYTES } from "../lib/overlayUpload";
 
 export type OverlayFile = {
   path: string; size: number; mode: string; executable: boolean; modified: string;
@@ -27,6 +28,21 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
   // State, not a ref: choosing a file has to reveal the destination-path input,
   // and a ref would not re-render to show it.
   const [pending, setPending] = useState<File | null>(null);
+  // A picked directory, held until the operator has seen where it will land.
+  const dirRef = useRef<HTMLInputElement>(null);
+  const [pendingDir, setPendingDir] = useState<File[] | null>(null);
+  const [dirPrefix, setDirPrefix] = useState("/");
+  const [includeTop, setIncludeTop] = useState(true);
+  const [dirProgress, setDirProgress] = useState("");
+
+  // React has no typing for webkitdirectory, and it must be a real attribute
+  // on the element for the browser to offer a folder picker at all.
+  useEffect(() => {
+    const el = dirRef.current;
+    if (!el) return;
+    el.setAttribute("webkitdirectory", "");
+    el.setAttribute("directory", "");
+  }, []);
 
   async function load() {
     try {
@@ -126,6 +142,71 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
     finally { setBusy(false); }
   }
 
+  function pickDir(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files || []);
+    if (!picked.length) return;
+    if (picked.length > MAX_DIR_FILES) {
+      toast.error(`That folder has ${picked.length} files; the limit is ${MAX_DIR_FILES}. ` +
+                  "Pick a narrower folder — this is usually a home directory chosen by mistake.");
+      if (dirRef.current) dirRef.current.value = "";
+      return;
+    }
+    const total = picked.reduce((n, f) => n + f.size, 0);
+    if (total > MAX_DIR_BYTES) {
+      toast.error(`That folder is ${fmtBytes(total)}; the limit is ${fmtBytes(MAX_DIR_BYTES)}.`);
+      if (dirRef.current) dirRef.current.value = "";
+      return;
+    }
+    setPendingDir(picked);
+    setPending(null);
+  }
+
+  async function uploadDir() {
+    if (!pendingDir) return;
+    const { send, skipped } = planDirUpload(pendingDir, dirPrefix, includeTop);
+    if (!send.length) { toast.error("Nothing to upload from that folder"); return; }
+    const bad = send.find((s) => !s.path.startsWith("/"));
+    if (bad) { toast.error(`The destination must start with / (got ${bad.path})`); return; }
+
+    setBusy(true);
+    // One request per file, through the same endpoint a single upload uses.
+    // Everything that keeps a path inside overlay.d lives behind it, and a
+    // bulk endpoint would be a second way in to the one place in this app
+    // where a path from a browser reaches open().
+    const failures: string[] = [];
+    let done = 0;
+    for (const item of send) {
+      setDirProgress(`${done + 1} of ${send.length}: ${item.path}`);
+      try {
+        const form = new FormData();
+        form.append("path", item.path);
+        form.append("file", item.file);
+        form.append("executable", String(LIKELY_EXECUTABLE.test(item.path)));
+        await api.post("/overlay/upload", form);
+        done++;
+      } catch (err) {
+        failures.push(`${item.path}: ${apiError(err)}`);
+      }
+    }
+    setDirProgress("");
+    setBusy(false);
+    setPendingDir(null);
+    if (dirRef.current) dirRef.current.value = "";
+    await load();
+
+    if (failures.length) {
+      // Named, not counted: "3 failed" sends someone hunting through a file
+      // list to work out which three.
+      toast.error(`${done} uploaded, ${failures.length} failed — ${failures.slice(0, 3).join("; ")}` +
+                  (failures.length > 3 ? ` (+${failures.length - 3} more)` : ""));
+    } else {
+      toast.success(`Uploaded ${done} file${done === 1 ? "" : "s"}` +
+                    (skipped.length ? `, skipped ${skipped.length}` : ""));
+    }
+  }
+
+  const dirPlan = pendingDir ? planDirUpload(pendingDir, dirPrefix, includeTop) : null;
+
   return (
     <div className="space-y-4">
       {ro && (
@@ -143,6 +224,12 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
             <Upload size={13} /> Choose a file…
           </span>
         </label>
+        <label className={`inline-flex ${ro ? "pointer-events-none opacity-50" : ""}`}>
+          <input ref={dirRef} type="file" multiple className="hidden" onChange={pickDir} disabled={ro} />
+          <span className="inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-100 transition hover:bg-zinc-700">
+            <FolderUp size={13} /> Choose a folder…
+          </span>
+        </label>
         {pending && (
           <>
             <Input className="max-w-xs" value={uploadPath} onChange={(e) => setUploadPath(e.target.value)}
@@ -152,6 +239,55 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
         )}
         <Button size="sm" variant="secondary" className="ml-auto" onClick={load}><RefreshCw size={13} /></Button>
       </div>
+
+      {/* A folder upload writes many paths at once, so it shows exactly which
+          ones before sending anything. The mapping is the part that is easy to
+          get wrong -- whether the chosen folder's own name is part of the
+          destination is a coin flip until you can see the answer. */}
+      {dirPlan && (
+        <div className="rounded-lg border border-brand-600/40 bg-zinc-950 p-4 text-sm">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label>Destination directory</Label>
+              <Input className="w-56 font-mono text-xs" value={dirPrefix}
+                     onChange={(e) => setDirPrefix(e.target.value)} placeholder="/" />
+            </div>
+            <label className="flex items-center gap-2 pb-2 text-xs text-zinc-300">
+              <input type="checkbox" checked={includeTop}
+                     onChange={(e) => setIncludeTop(e.target.checked)} />
+              Include the folder's own name in the path
+            </label>
+            <Button size="sm" loading={busy} onClick={uploadDir} className="ml-auto">
+              <CornerUpRight size={13} /> Upload {dirPlan.send.length} file{dirPlan.send.length === 1 ? "" : "s"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => {
+              setPendingDir(null); if (dirRef.current) dirRef.current.value = "";
+            }}><X size={13} /></Button>
+          </div>
+
+          <p className="mt-3 text-xs text-zinc-500">
+            {dirPlan.send.length} file{dirPlan.send.length === 1 ? "" : "s"}, {fmtBytes(dirPlan.bytes)}
+            {dirPlan.skipped.length > 0 && <> — skipping {dirPlan.skipped.length}{" "}
+              (<span className="font-mono">{dirPlan.skipped.slice(0, 3).join(", ")}</span>
+              {dirPlan.skipped.length > 3 ? ", …" : ""})</>}
+          </p>
+
+          <div className="mt-2 max-h-40 overflow-y-auto rounded border border-zinc-800 bg-black p-2 font-mono text-xs text-zinc-400">
+            {dirPlan.send.slice(0, 40).map((s) => <div key={s.path}>{s.path}</div>)}
+            {dirPlan.send.length > 40 && <div className="text-zinc-600">…and {dirPlan.send.length - 40} more</div>}
+          </div>
+
+          {/* Browsers do not expose a file's permissions, so this cannot be
+              inferred the way it can for a file already on disk. Saying so
+              beats shipping a directory of scripts that silently do not run. */}
+          <p className="mt-2 text-xs text-amber-500/80">
+            A browser cannot read file permissions, so everything arrives 0644 unless its
+            path is one that is usually executable. Check the modes afterwards for anything
+            that needs to run.
+          </p>
+          {dirProgress && <p className="mt-2 font-mono text-xs text-zinc-400">{dirProgress}</p>}
+        </div>
+      )}
 
       {editing && (
         <div className="rounded-lg border border-brand-600/40 bg-zinc-950 p-4">

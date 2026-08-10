@@ -74,6 +74,19 @@ jobs:
           npx tsc --noEmit
           npm run build
 
+      - name: Where a folder upload puts its files
+        working-directory: webui/frontend
+        run: |
+          # The one place a path chosen in a browser becomes a destination for a
+          # write endpoint. The server refuses anything escaping overlay.d
+          # regardless, so this is about the mapping being right -- a folder
+          # landing one directory off is found by a machine behaving oddly
+          # rather than by an error. Plain node; the frontend has no test runner
+          # and adding one for two pure functions is the worse trade.
+          npx esbuild src/lib/overlayUpload.ts --format=esm \
+            --outfile=src/lib/overlayUpload.built.mjs --log-level=error
+          node src/lib/overlayUpload.test.mjs
+
       - name: Backend imports and routes
         working-directory: webui/backend
         run: |
