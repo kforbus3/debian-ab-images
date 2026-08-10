@@ -2,7 +2,21 @@
 
 Notable changes per release. Dates are the tag date.
 
-## Unreleased
+## v0.6.0 — 2026-08-09
+
+Two features, and a chain of imaging bugs that one bug report pulled apart.
+
+"The hostname field on the Provisioning page does nothing" turned out to sit on
+top of three defects that had been there far longer and were concealing each
+other: the imager could never mount ext4, so it never wrote the marker the
+installed system reads; every machine identified itself as `unknown-1`; and the
+progress reports had no route to the web UI. None of them announced itself,
+because each one's symptom was the next one's silence.
+
+Machines are also no longer one bad reboot away from switching slots — a
+separate hunt, same shape: a boot counter that was armed on every boot and
+disarmed too late to matter.
+
 
 **Fixed: a killed build poisoned every build after it.** `Device luks-rootfs-a
 already exists.` The builder opened its LUKS volumes under the same mapper names
