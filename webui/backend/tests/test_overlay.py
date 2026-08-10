@@ -151,6 +151,37 @@ r = client.post("/api/overlay/upload", data={"path": "/usr/local/bin/tool", "exe
 check("uploads can be executable",
       oct(stat.S_IMODE(os.stat(os.path.join(ROOT, "usr/local/bin/tool")).st_mode)) == "0o755", r.text)
 
+print("\n== a folder upload is many single uploads ==")
+# The browser sends one request per file, each with the path it should land at,
+# so a directory upload is exactly this endpoint called repeatedly. What that
+# has to survive is a relative path from a browser being appended to a
+# destination prefix -- deep trees, and anything trying to climb out of one.
+tree = {
+    "/srv/app/config.yaml": b"a: 1\n",
+    "/srv/app/templates/index.html": b"<p>hi</p>\n",
+    "/srv/app/static/css/site.css": b"body{}\n",
+}
+for path, body in tree.items():
+    r = client.post("/api/overlay/upload", data={"path": path},
+                    files={"file": (os.path.basename(path), io.BytesIO(body))}, headers=H)
+    check(f"uploaded {path}", r.status_code == 200, r.text)
+check("intermediate directories are created",
+      os.path.isdir(os.path.join(ROOT, "srv/app/templates")))
+check("every file kept its own bytes",
+      all(open(os.path.join(ROOT, p.lstrip("/"))).read() == b.decode()
+          for p, b in tree.items()))
+
+# A prefix and a relative path are joined in the browser, so the server sees
+# only the result -- which is the string that must not be trusted.
+for bad in ("/srv/app/../../escaped", "/srv/../../etc/shadow",
+            "/srv/app/./sneaky", "srv/app/../../../out"):
+    r = client.post("/api/overlay/upload", data={"path": bad},
+                    files={"file": ("f", io.BytesIO(b"x"))}, headers=H)
+    check(f"refused {bad!r}", r.status_code == 400, r.text)
+check("nothing escaped overlay.d",
+      not os.path.exists(os.path.join(os.path.dirname(ROOT), "escaped")) and
+      not os.path.exists(os.path.join(os.path.dirname(ROOT), "out")))
+
 print("\n== move and delete ==")
 r = client.post("/api/overlay/move", json={"from": "/etc/secret.conf", "to": "/etc/app/secret.conf"}, headers=H)
 check("a file can be moved", r.status_code == 200, r.text)
