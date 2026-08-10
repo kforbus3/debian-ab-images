@@ -87,6 +87,17 @@ for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
     mount "/dev/${BB}p$n" /mnt/e2eboot 2>/dev/null || break
     if [ -r /mnt/e2eboot/ab-deploy.json ]; then
         echo "  ab-deploy.json: $(cat /mnt/e2eboot/ab-deploy.json)"
+        # The id is how the web UI joins a machine's imaging progress to its
+        # later check-in. It was computed before any network driver was loaded,
+        # so no interface existed, and every machine fell back to "unknown-1" --
+        # one row in the UI for the whole fleet.
+        if grep -qE '"id"[[:space:]]*:[[:space:]]*"([0-9a-f]{2}:){5}[0-9a-f]{2}"' /mnt/e2eboot/ab-deploy.json; then
+            echo "  ok   the machine identified itself by MAC address"
+        else
+            echo "  FAIL the machine did not identify itself by MAC"
+            echo "       a fleet reporting one shared id collides into a single UI row"
+            FAILED=1
+        fi
         if grep -q "\"hostname\"[[:space:]]*:[[:space:]]*\"${ASSIGNED_HOSTNAME}\"" /mnt/e2eboot/ab-deploy.json; then
             echo "  ok   the assigned hostname reached the installed system"
         else
