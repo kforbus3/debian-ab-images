@@ -263,6 +263,22 @@ jobs:
             --entrypoint bash debian-ab-builder:amd64 /s/test-overlay-boot.sh | tee boot.log
           grep -q "root-fstype: overlay" boot.log || { echo "::error::root is not an overlay"; exit 1; }
 
+      - name: The imager applies what the iPXE script tells it
+        run: |
+          # This test existed and was never wired in, which is how the one
+          # unwatched hop -- iPXE argument -> imager -> /boot/ab-deploy.json --
+          # shipped broken. An imager silently ignores parameters it does not
+          # understand, so the machine images perfectly and comes up with the
+          # wrong name; it reads as the web UI dropping the field. The imager
+          # here is built from this checkout, so it also catches a parameter
+          # added to the generated scripts but not to init.
+          ./imager/run.sh
+          docker run --rm --privileged -v "$PWD/output":/output -v "$PWD/scripts":/s \
+            -e IMAGE_FILE=ovl-test.img -e ASSIGNED_HOSTNAME=e2e-assigned \
+            --entrypoint bash debian-ab-builder:amd64 /s/test-imager-e2e.sh | tee e2e.log
+          grep -q "ALL PASS" e2e.log \
+            || { echo "::error::the imager did not apply the assigned hostname"; exit 1; }
+
       - name: A healthy machine keeps booting the same slot
         run: |
           # The gap nothing watched. grub.cfg arms a one-shot fallback every

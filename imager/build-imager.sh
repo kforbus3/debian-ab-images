@@ -79,6 +79,27 @@ log "Packing initramfs"
 ( cd "$ROOT" && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$OUT/initramfs.img"
 
 echo "$KVER" > "$OUT/KERNEL_VERSION"
+
+# --- what this imager understands ---------------------------------------------
+#
+# The imager is a build artifact: `init` is baked into the initramfs, so a repo
+# that has grown a new imager.* parameter does nothing until someone runs
+# `make imager`. Nothing said so, and the failure is silent in the worst way --
+# the iPXE script passes imager.hostname=, an older imager ignores unknown
+# parameters exactly as it should, and the machine images perfectly with the
+# wrong name. It looks like the web UI dropped the field.
+#
+# So the imager states what it supports, and the web UI reads it back and warns
+# when an assignment needs something this build does not have. Derived from
+# `init` itself rather than hand-maintained: a list that has to be remembered is
+# a list that goes stale exactly when it matters.
+FEATURES="$(grep -oE 'getarg imager\.[a-z]+' "$HERE/init" \
+            | sed 's/getarg imager\.//' | sort -u | tr '\n' ' ')"
+printf '{"built":"%s","kernel":"%s","features":[%s]}\n' \
+    "$(date -u +%FT%TZ)" "$KVER" \
+    "$(printf '%s' "$FEATURES" | sed 's/ *$//; s/[^ ][^ ]*/"&"/g; s/ /,/g')" \
+    > "$OUT/build.json"
+log "Imager features: ${FEATURES:-none detected}"
 rm -rf "$WORK"
 
 log "Imager built:"

@@ -116,7 +116,9 @@ if [ -d /lib/modules ]; then
     for m in virtio_pci virtio_net virtio_blk virtio_scsi \
              e1000 e1000e igb igc ixgbe tg3 r8169 atlantic bnx2 bnx2x \
              ahci sd_mod nvme nvme_core xhci_pci ehci_pci usb_storage \
-             ext4 mii; do
+             ext4 jbd2 mbcache crc16 \
+             crc32c_generic libcrc32c crc32_generic \
+             vfat fat nls_cp437 nls_iso8859_1 mii; do
         $BB modprobe "$m" 2>/dev/null || true
     done
 fi
@@ -269,7 +271,23 @@ grow_overlay() {
 grow_overlay || true
 
 # Re-read the partition table so the kernel sees the new layout.
-$BB blockdev --rereadpt "$TARGET" 2>/dev/null || true
+#
+# Not best-effort any more. Everything after this depends on the kernel knowing
+# the partitions that were just written: without it there is no BOOT node to
+# mount, and the check-in marker -- which carries the assigned hostname and is
+# what ab-checkin.service waits on -- is silently never written.
+if $BB blockdev --rereadpt "$TARGET" 2>/dev/null; then
+    _rr=ok
+else
+    _rr=failed
+    # The disk is not in use here, so a refusal is worth saying out loud rather
+    # than discovering three steps later as a mount that cannot find its device.
+    say "WARNING: the kernel refused to re-read the partition table on $TARGET"
+fi
+$BB sync
+say "partition table re-read: $_rr"
+say "  /proc/partitions: $($BB cat /proc/partitions 2>/dev/null | $BB awk 'NR>2 {printf "%s ", $4}')"
+say "  nodes: $($BB ls -d /dev/${TARGET##*/}* 2>/dev/null | $BB tr '\n' ' ')"
 
 # --- leave the machine a way to report that it booted ------------------------
 #
@@ -282,20 +300,97 @@ $BB blockdev --rereadpt "$TARGET" 2>/dev/null || true
 # So the address is left on the BOOT partition, which is plain ext4 (the root
 # slots may be LUKS, and the overlay certainly is) and is mounted at /boot by
 # the installed system. ab-checkin.service reads it on the next boot.
+# Find the freshly written BOOT partition's device node, waiting for it to
+# appear and creating it if nothing else does.
+#
+# There is no udev here and no `udevadm settle` to wait on. blockdev --rereadpt
+# makes the kernel re-read the table and devtmpfs creates the nodes in response,
+# but that is asynchronous -- and the old code tested `[ -b ... ]` on the very
+# next line and gave up silently when it lost the race. The marker was simply
+# never written: ab-checkin.service has ConditionPathExists on it, so it did
+# nothing, no machine ever reported that it booted, and the assigned hostname
+# had nowhere to travel. Every path here now says what happened.
+find_part_node() {              # find_part_node <disk> <number> -> node, or empty
+    _d="$1"; _n="$2"; _try=0
+    while [ "$_try" -lt 40 ]; do
+        for _cand in "${_d}${_n}" "${_d}p${_n}"; do
+            [ -b "$_cand" ] && { echo "$_cand"; return 0; }
+        done
+        # devtmpfs has not produced it. The kernel still knows the partition, so
+        # take the numbers from sysfs and make the node -- the same thing this
+        # project's own harnesses do inside containers with no udev.
+        _base="${_d##*/}"
+        for _cand in "${_base}${_n}" "${_base}p${_n}"; do
+            if [ -r "/sys/class/block/${_cand}/dev" ]; then
+                _mm="$($BB cat "/sys/class/block/${_cand}/dev")"
+                $BB mknod "/dev/${_cand}" b "${_mm%%:*}" "${_mm##*:}" 2>/dev/null \
+                    && { echo "/dev/${_cand}"; return 0; }
+            fi
+        done
+        $BB sleep 0.25
+        _try=$((_try + 1))
+    done
+    return 1
+}
+
 leave_checkin_marker() {
-    [ -n "$REPORT_URL" ] || return 0
+    if [ -z "$REPORT_URL" ]; then
+        say "NOTE: no report URL, so no check-in marker was left on this machine"
+        return 0
+    fi
     _url="$(echo "$REPORT_URL" | $BB sed 's|/report$|/checkin|')"
     _num="$(/usr/sbin/sgdisk -p "$TARGET" 2>/dev/null | $BB awk '$NF == "BOOT" { print $1; exit }')"
-    [ -n "$_num" ] || return 0
-    _part="${TARGET}${_num}"
-    [ -b "$_part" ] || _part="${TARGET}p${_num}"
-    [ -b "$_part" ] || return 0
+    if [ -z "$_num" ]; then
+        say "WARNING: no partition labelled BOOT on $TARGET; this machine will not"
+        say "         report that it booted, and any assigned hostname is lost"
+        return 0
+    fi
+    _part="$(find_part_node "$TARGET" "$_num")"
+    if [ -z "$_part" ]; then
+        say "WARNING: the BOOT partition node for $TARGET$_num never appeared; this"
+        say "         machine will not report that it booted, and any assigned"
+        say "         hostname is lost"
+        return 0
+    fi
     $BB mkdir -p /mnt/bootpart 2>/dev/null || return 0
-    $BB mount -t ext4 "$_part" /mnt/bootpart 2>/dev/null || return 0
+    # ext4 is in the modprobe list at the top, but that runs before any disk has
+    # been touched and its failures are swallowed. Ask again here, where it
+    # actually matters, and then try with an explicit type and without one --
+    # busybox mount and the kernel disagree about which of those works when the
+    # module has only just arrived.
+    $BB modprobe ext4 2>/dev/null || true
+    # -i is load-bearing: without it busybox tries to exec a /sbin/mount.ext4
+    # helper first, and an initramfs has no mount helpers. The exec fails with
+    # ENOENT and busybox reports *that* as the mount failure -- "mounting
+    # /dev/vda3 on /mnt/bootpart failed: No such file or directory" -- which
+    # names a missing file that has nothing to do with either the device or the
+    # mountpoint. Both were present and correct the whole time; the device was
+    # even readable. This wrote no marker on any machine ever imaged, so
+    # ab-checkin.service (ConditionPathExists on it) never ran and no machine
+    # ever reported that it booted.
+    if ! _err="$($BB mount -i -t ext4 "$_part" /mnt/bootpart 2>&1)"; then
+        say "WARNING: could not mount $_part; no check-in marker was left."
+        say "         $_err"
+        # Is it ext4 specifically, or is mounting broken here generally? The ESP
+        # is vfat and sits on the same disk, so trying it separates the two.
+        _esp="${TARGET}2"
+        [ -b "$_esp" ] || _esp="${TARGET}p2"
+        # busybox reports the errno, which for a missing crypto driver is a
+        # thoroughly misleading ENOENT ("No such file or directory") naming a
+        # device and a directory that both exist. The kernel says what actually
+        # happened, and printed directly rather than through $( ) -- that
+        # swallowed dmesg twice while working fine for other commands.
+        say "         kernel log:"
+        $BB dmesg 2>&1 | $BB tail -5
+        return 0
+    fi
     printf '{"checkin_url":"%s","image":"%s","id":"%s","hostname":"%s"}\n' \
         "$_url" "$IMG_URL" "$CLIENT_ID" "$ASSIGNED_HOSTNAME" > /mnt/bootpart/ab-deploy.json 2>/dev/null || true
     $BB sync
     $BB umount /mnt/bootpart 2>/dev/null || true
+    if [ -n "$ASSIGNED_HOSTNAME" ]; then
+        say "This machine will come up as '${ASSIGNED_HOSTNAME}'"
+    fi
 }
 leave_checkin_marker || true
 

@@ -4,6 +4,47 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**Fixed: the imager could never mount ext4, so no machine has ever left a
+check-in marker.** `EXT4-fs: Cannot load crc32c driver.` ext4 uses crc32c for
+metadata checksums and requests it at *runtime* through the crypto API, not as a
+link-time symbol — so it never appears in `modules.dep`, `depmod` never resolves
+it, and `modprobe ext4` never pulled it in. The module loaded and registered, so
+`ext4` appeared in `/proc/filesystems` and everything looked correct; the mount
+then failed, and busybox reported it as `ENOENT` — "No such file or directory",
+naming a device and a directory that both existed and were both readable.
+
+Consequences, all silent:
+
+- `/boot/ab-deploy.json` was never written on any machine ever imaged.
+- `ab-checkin.service` has `ConditionPathExists` on that file, so it never ran —
+  no machine has ever reported that it booted, and the Fleet page could only
+  ever show `never-booted`.
+- The per-machine hostname added earlier in this release travelled as far as the
+  imager and stopped there, so assigned names were silently ignored.
+
+`crc32c_generic` and `libcrc32c` are now loaded. Alongside that, three things
+that turned a one-line kernel message into a long hunt:
+
+- `leave_checkin_marker` returned 0 on every failure path without a word. It now
+  says which step failed and prints the kernel log, which named the cause
+  immediately the first time it was asked directly.
+- The BOOT partition's device node is waited for and, failing that, created from
+  `/sys/class/block` — there is no udev in the initramfs and the old code tested
+  for the node on the line after `blockdev --rereadpt`.
+- `blockdev --rereadpt` no longer discards its exit status.
+
+`scripts/test-imager-e2e.sh` covered this hop and **was never wired into CI**. It
+now runs nightly, passes `imager.hostname=` and asserts both the marker and that
+the machine boots under the assigned name — against an image deliberately built
+with a different one. It is also arch-aware now, so it can be run on an
+Apple-silicon host instead of only after a mistake has shipped.
+
+**The imager states what it supports.** `output/imager/build.json` records the
+build time and the `imager.*` parameters the built `init` understands, derived
+from `init` itself. The Provisioning page reads it back and warns when an
+assignment needs a parameter the built imager lacks — the imager is a separate
+artifact, and `git pull` does not rebuild it.
+
 **Machines can be named in the provisioning assignment.** An image cannot carry
 a hostname — every machine written from it would answer to the same one — so the
 only way to name a machine was to log in after imaging and set it by hand. That
