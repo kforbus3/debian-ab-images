@@ -4,6 +4,48 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**A machine netbooting during an imager rebuild no longer boots a half-written
+imager.** The pack wrote the initramfs with a redirect straight onto
+`output/imager/initramfs.img` — the file the PXE server is serving. The redirect
+truncates it the moment packing starts and then fills it over the several minutes
+the module tree takes, so a machine that netbooted in that window fetched a
+complete kernel and a partial archive, found no `/init` in it, and stopped at:
+
+```
+Run /sbin/init as init process
+Run /etc/init as init process
+Run /bin/init as init process
+Run /bin/sh as init process
+Kernel panic - not syncing: No working init found.
+```
+
+Nothing in the build output said anything, and by the time anyone inspected the
+file the build had finished and it was whole again. Note the panic carries no
+"Failed to execute /init" line — the kernel prints that only when `/init` exists
+and cannot be run, and says nothing at all when it is simply absent — so the
+message names neither the archive nor the file.
+
+The kernel and the initramfs are now packed beside their destinations and moved
+into place. A rename within one filesystem is atomic, so a machine gets either
+the previous imager or the new one, never part of either. The same property
+covers a build that dies partway: it no longer destroys the working imager it
+was replacing.
+
+**The imager is checked before it is published.** `imager/verify-initramfs.sh`
+confirms the archive is a complete gzip stream and that `/init` and
+`/bin/busybox` (the interpreter its shebang names) are both in it. The build runs
+it and refuses to publish otherwise, and it can be run by hand against a server's
+live artifact — which is the quickest way to tell a broken imager from a broken
+image when a machine panics on netboot. cpio's stderr is no longer discarded.
+
+**A per-machine iPXE script now boots the imager the machine can run.** The
+generated per-machine script had drifted from the fallback template: it hardcoded
+`/imager/` rather than choosing from iPXE's `${buildarch}`, so an arm64 machine
+*with an assignment* was handed the amd64 imager while the same machine left
+unassigned booted correctly. Neither fetch was guarded, so a missing imager
+aborted the script instead of saying so and rebooting. Both now match the
+fallback.
+
 **Whole folders can be uploaded to the image files.** *Choose a folder…* on the
 Image Files page takes everything beneath it and keeps the tree. Previously the
 only way to ship a directory was one file at a time, or a shell on the host —

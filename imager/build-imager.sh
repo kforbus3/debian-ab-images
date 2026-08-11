@@ -21,6 +21,9 @@ esac
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 log() { echo -e "\033[0;32m[imager-build]\033[0m $*"; }
+# Failures here ship a broken imager to every machine that netboots, so they end
+# the build loudly rather than being carried past by a warning nobody reads.
+die() { echo -e "\033[0;31m[imager-build] ERROR:\033[0m $*" >&2; exit 1; }
 
 mkdir -p "$OUT"
 WORK="$(mktemp -d)"
@@ -31,7 +34,11 @@ KVER="$(ls /lib/modules | sort -V | tail -n1)"
 log "Kernel version: $KVER"
 
 # --- Kernel ---
-cp "/boot/vmlinuz-${KVER}" "$OUT/vmlinuz"
+# Staged and renamed, for the same reason as the initramfs below: this file is
+# being served to netbooting machines while the build runs, and a plain cp
+# truncates it first and fills it after.
+cp "/boot/vmlinuz-${KVER}" "$OUT/.vmlinuz.$$"
+mv -f "$OUT/.vmlinuz.$$" "$OUT/vmlinuz"
 
 # --- Busybox (provides sh, wget, gzip, ip, udhcpc, dd, mknod, etc.) ---
 cp /bin/busybox "$ROOT/bin/busybox"
@@ -75,8 +82,39 @@ cp "$HERE/init" "$ROOT/init"
 chmod +x "$ROOT/init"
 
 # --- Pack the initramfs ---
+#
+# Packed beside the destination and moved into place, never written to it
+# directly. A redirect onto $OUT/initramfs.img truncates it the moment packing
+# starts and then fills it over the several minutes the module tree takes, and
+# that file is the one the PXE server is serving RIGHT NOW. Any machine that
+# netboots during a rebuild gets a complete kernel and a half-written initramfs,
+# unpacks an archive with no /init in it, and panics with "No working init
+# found" -- with nothing in the build output to say why, because by the time
+# anyone looks the file is whole again.
+#
+# A rename within one filesystem is atomic, so a machine gets either the
+# previous imager or the new one. The same property covers a build that dies
+# partway: the working artifact it would otherwise have destroyed is untouched,
+# because nothing replaces it until there is something complete to replace it
+# with.
 log "Packing initramfs"
-( cd "$ROOT" && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$OUT/initramfs.img"
+TMP_IMG="$OUT/.initramfs.img.$$"
+trap 'rm -f "$TMP_IMG"' EXIT
+# cpio's stderr is kept. It was discarded, which is what made a bad pack silent
+# -- and a silent bad pack is exactly what ships a broken imager.
+( cd "$ROOT" && find . | cpio -o -H newc | gzip -9 ) > "$TMP_IMG"
+
+# Verify what was actually produced, not what was intended. Shared with
+# verify-initramfs.sh so the check the build runs is the same one an operator can
+# run against a server's live artifact when a machine panics on netboot.
+log "Verifying the packed initramfs"
+"$HERE/verify-initramfs.sh" "$TMP_IMG" \
+    || die "the packed initramfs is not bootable; the existing imager has been left in place"
+
+# The publish. Everything above happened beside the live artifact; this is the
+# only moment it changes, and it changes in one step.
+mv -f "$TMP_IMG" "$OUT/initramfs.img"
+trap - EXIT
 
 echo "$KVER" > "$OUT/KERNEL_VERSION"
 

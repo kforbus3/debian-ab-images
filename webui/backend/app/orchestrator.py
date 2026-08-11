@@ -1202,9 +1202,27 @@ echo ====================================================
 echo Booting the imager... this machine's disk will be re-imaged.
 echo
 
-kernel http://{ip}/imager/vmlinuz imager.url=http://{ip}/images/{a['image']} imager.action={action} imager.compress=auto{host_arg} console=tty0 console=ttyS0,115200
-initrd http://{ip}/imager/initramfs.img
+# The imager is a kernel the machine executes, so it has to match the machine.
+# ${{buildarch}} is iPXE's own variable, expanded at boot on the machine itself --
+# this file is written once and served to whatever asks for it. Without the
+# branch an arm64 machine with a specific assignment is handed the amd64 imager,
+# while the same machine falling through to the default script gets the right
+# one, which is a confusing way to find out.
+iseq ${{buildarch}} arm64 && set imgdir imager/arm64 || set imgdir imager
+
+# || goto noimager on both: a missing or unreachable imager should say so and
+# reboot, not abort the script and drop the machine at an iPXE prompt.
+kernel http://{ip}/${{imgdir}}/vmlinuz imager.url=http://{ip}/images/{a['image']} imager.action={action} imager.compress=auto{host_arg} console=tty0 console=ttyS0,115200 || goto noimager
+initrd http://{ip}/${{imgdir}}/initramfs.img || goto noimager
 boot
+
+:noimager
+echo
+echo No imager available for this machine's architecture (${{buildarch}}).
+echo Build it on the Build Image page, or: ./imager/run.sh --arch arm64
+echo
+sleep 30
+reboot
 """
     with open(os.path.join(hosts_dir(), _mac_filename(a["mac"])), "w") as f:
         f.write(script)
