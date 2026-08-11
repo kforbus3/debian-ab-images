@@ -185,6 +185,26 @@ jobs:
           # the machine disagree -- so names are refused, not corrected.
           python tests/test_assignment_hostname.py
 
+      - name: A per-machine iPXE script boots the right imager
+        working-directory: webui/backend
+        run: |
+          # The generated per-machine script had drifted from the fallback
+          # template: it hardcoded the amd64 imager and guarded neither fetch,
+          # so an arm64 machine WITH an assignment got an imager it cannot run
+          # while the same machine unassigned booted fine. The failure is a
+          # kernel panic that names nothing.
+          python tests/test_host_script_arch.py
+
+      - name: The imager is published whole, or not at all
+        run: |
+          # The pack used to redirect straight onto the artifact the PXE server
+          # is serving, truncating it for the several minutes the module tree
+          # takes. A machine netbooting during a rebuild got a complete kernel
+          # and a half-written initramfs, found no /init, and panicked -- with
+          # nothing in the build output to say so, because the file was whole
+          # again by the time anyone looked.
+          ./scripts/test-imager-publish.sh
+
       - name: Overlay file management
         working-directory: webui/backend
         run: |

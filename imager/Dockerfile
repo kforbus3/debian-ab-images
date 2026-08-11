@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /imager
-COPY build-imager.sh init udhcpc.script /imager/
-RUN chmod +x /imager/build-imager.sh
+COPY build-imager.sh verify-initramfs.sh init udhcpc.script /imager/
+RUN chmod +x /imager/build-imager.sh /imager/verify-initramfs.sh
 
 VOLUME /output
 ENTRYPOINT ["/imager/build-imager.sh"]
