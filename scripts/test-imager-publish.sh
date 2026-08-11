@@ -100,16 +100,59 @@ if grep -qE 'cp .*"\$OUT/vmlinuz"' "$BUILD"; then
 else
     ok "the kernel is not written directly onto the served path"
 fi
+# The kernel and the initramfs are a pair: the initramfs carries modules built for
+# that exact kernel version. Publishing the kernel before the initramfs is built
+# means a build that fails in between leaves a new kernel beside the old
+# initramfs, and across a kernel bump that machine has no modules at all.
+kern_pub=$(grep -n 'mv -f "\$TMP_KERNEL" "\$OUT/vmlinuz"' "$BUILD" | cut -d: -f1)
+img_pub=$(grep -n 'mv -f "\$TMP_IMG" "\$OUT/initramfs.img"' "$BUILD" | cut -d: -f1)
+verify_at=$(grep -n 'verify-initramfs.sh' "$BUILD" | tail -1 | cut -d: -f1)
+if [ -n "$kern_pub" ] && [ -n "$verify_at" ] && [ "$kern_pub" -gt "$verify_at" ]; then
+    ok "the kernel is published only after the initramfs is verified"
+else
+    bad "the kernel is published before the initramfs is verified (mismatched pair on failure)"
+fi
+if [ -n "$kern_pub" ] && [ -n "$img_pub" ] && [ $((kern_pub - img_pub)) -le 2 ]; then
+    ok "kernel and initramfs are published back to back"
+else
+    bad "kernel and initramfs publishes are not adjacent"
+fi
+# A failed build must take its staged kernel with it, not leave it in the served
+# directory where the next glob or rsync could pick it up.
+if grep -q 'trap .rm -f "\$TMP_IMG" "\$TMP_KERNEL". EXIT' "$BUILD"; then
+    ok "a failed build cleans up both staged artifacts"
+else
+    bad "a failed build leaves a staged artifact behind"
+fi
 if grep -q 'mv -f "\$TMP_IMG" "\$OUT/initramfs.img"' "$BUILD"; then
     ok "the initramfs is published with a rename"
 else
     bad "the initramfs is not published with a rename"
 fi
-# A pack that dies must leave the working imager alone, not a stub of a new one.
-if grep -q "trap 'rm -f \"\$TMP_IMG\"' EXIT" "$BUILD"; then
-    ok "a failed pack cleans up its temporary file"
+# Modules stay compressed: decompressing the tree is what made the initramfs
+# 527 MB unpacked, which every machine has to hold in RAM to boot.
+if grep -qE "find .*-name '\*\.ko\.(xz|zst)'.*(unxz|zstd -d)" "$BUILD"; then
+    bad "build-imager.sh still decompresses the module tree"
 else
-    bad "a failed pack leaves its temporary file behind"
+    ok "the module tree is left compressed"
+fi
+if grep -q 'ln -sf /usr/bin/kmod "$ROOT/sbin/modprobe"' "$BUILD"; then
+    ok "the real modprobe is shipped (busybox cannot read compressed modules)"
+else
+    bad "no real modprobe is shipped, so compressed modules cannot be loaded"
+fi
+# kmod dlopens its decompressors, so ldd never reports them and copy_with_libs
+# cannot see them. Today they arrive incidentally because the zstd binary happens
+# to link liblzma -- which is an accident, not a dependency, and accidents move.
+if grep -q 'for soname in liblzma.so.5 libzstd.so.1' "$BUILD"; then
+    ok "kmod's dlopened decompressors are copied deliberately"
+else
+    bad "kmod's dlopened decompressors are not copied deliberately"
+fi
+if grep -q 'modinfo -F description' "$BUILD"; then
+    ok "the build proves a compressed module can actually be decompressed"
+else
+    bad "nothing proves the shipped libraries can decompress a module"
 fi
 
 echo
