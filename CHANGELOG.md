@@ -4,6 +4,40 @@ Notable changes per release. Dates are the tag date.
 
 ## Unreleased
 
+**The imager initramfs is a quarter of the size it was.** On amd64 it unpacks to
+**113 MB instead of 502 MB**, and the download dropped from 123.5 MB to 97.3 MB.
+Peak memory to boot it — the compressed image plus the unpacked tree, both held at
+once — falls from roughly 628 MB to about 211 MB.
+
+Almost all of it was the module tree. Debian ships modules as `.ko.xz`, busybox's
+`modprobe` cannot read a compressed module, so the build expanded all 5188 of them
+in place: 504 MB of the old 527 MB. The real `modprobe` from kmod reads them
+compressed, so it is shipped instead and the tree is left exactly as Debian
+packaged it. The download shrank as well, because gzip was being asked to compress
+data that xz had already compressed better.
+
+Two things this changed that are worth knowing:
+
+- **kmod dlopens its decompressors.** `liblzma.so.5` and `libzstd.so.1` are not in
+  the binary's `NEEDED` list, so `ldd` never reports them and the helper that
+  copies a binary's libraries cannot see them. They arrive today only because the
+  `zstd` binary happens to link liblzma — an accident, not a dependency. They are
+  now copied deliberately, and the build proves a real `.ko.xz` can be decompressed
+  by the shipped binary with the shipped libraries, chrooted so nothing on the
+  build host can stand in for something the initramfs is missing.
+- **`depmod` now has to succeed.** `modprobe` resolves dependencies purely from
+  `modules.dep`, and the initramfs no longer regenerates it at boot — busybox's
+  `depmod` cannot read compressed modules, so running it would have replaced a
+  correct index with an empty one.
+
+**The kernel and the initramfs are published together.** The kernel was copied to
+its served path at the start of the build, minutes before the initramfs it belongs
+with was finished. A build that failed in between left a new `vmlinuz` beside the
+previous `initramfs.img`, and across a kernel bump that is a machine booting a
+kernel whose modules it does not have — no network, no storage, and nothing that
+says why. Both are now staged and renamed into place at the end, after the
+initramfs has been verified.
+
 **A machine netbooting during an imager rebuild no longer boots a half-written
 imager.** The pack wrote the initramfs with a redirect straight onto
 `output/imager/initramfs.img` — the file the PXE server is serving. The redirect

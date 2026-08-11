@@ -34,11 +34,20 @@ KVER="$(ls /lib/modules | sort -V | tail -n1)"
 log "Kernel version: $KVER"
 
 # --- Kernel ---
-# Staged and renamed, for the same reason as the initramfs below: this file is
-# being served to netbooting machines while the build runs, and a plain cp
-# truncates it first and fills it after.
-cp "/boot/vmlinuz-${KVER}" "$OUT/.vmlinuz.$$"
-mv -f "$OUT/.vmlinuz.$$" "$OUT/vmlinuz"
+# Staged, and NOT published until the initramfs beside it has been built and
+# verified. Two reasons, and the second is the one that bites:
+#
+#   A plain `cp` onto the served path truncates it first and fills it after, so a
+#   machine netbooting mid-build fetches a partial kernel.
+#
+#   The kernel and the initramfs are a PAIR -- the initramfs carries modules built
+#   for exactly this kernel version. Publishing the kernel early means a build
+#   that fails afterwards leaves a new vmlinuz beside the previous initramfs, and
+#   the moment a kernel bump is involved that machine boots a kernel whose modules
+#   it does not have: no network driver, no storage driver, and nothing that says
+#   why. So both are staged and published together at the end.
+TMP_KERNEL="$OUT/.vmlinuz.$$"
+cp "/boot/vmlinuz-${KVER}" "$TMP_KERNEL"
 
 # --- Busybox (provides sh, wget, gzip, ip, udhcpc, dd, mknod, etc.) ---
 cp /bin/busybox "$ROOT/bin/busybox"
@@ -62,18 +71,70 @@ for ldso in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 /lib/ld-linux
     [ -f "$ldso" ] && { mkdir -p "$ROOT$(dirname "$ldso")"; cp -L "$ldso" "$ROOT$ldso"; }
 done
 
+# --- Module loader (kmod), so modules can stay compressed ---
+#
+# Debian ships modules as .ko.xz. busybox's modprobe cannot decompress them, so
+# this used to expand the whole tree in place -- which is what made the initramfs
+# 527 MB unpacked, 504 MB of it modules, for a machine to hold in RAM at boot.
+# Shipping the real modprobe instead keeps them compressed: ~4x less memory for
+# the same download, since gzip was not compressing already-compressed modules
+# anyway.
+#
+# modprobe and depmod are both symlinks to one multicall binary that dispatches
+# on argv[0], so the binary is copied once and the names are recreated as links.
+KMOD_BIN="$(readlink -f "$(command -v modprobe)")"
+copy_with_libs "$KMOD_BIN" usr/bin
+# Absolute targets: these are resolved inside the initramfs at boot, where
+# /usr/bin/kmod is exactly where the binary lands.
+ln -sf /usr/bin/kmod "$ROOT/sbin/modprobe"
+ln -sf /usr/bin/kmod "$ROOT/sbin/depmod"
+# modinfo costs nothing (same binary, one more symlink) and is how the check
+# below reads a compressed module -- and how anyone debugging a machine that
+# will not see its NIC can ask what a module is.
+ln -sf /usr/bin/kmod "$ROOT/sbin/modinfo"
+
+# kmod DLOPENS its decompressors -- they are not in the ELF's NEEDED list, so
+# ldd does not report them and copy_with_libs cannot see them. Without these,
+# modprobe runs, finds the module, and fails to decompress it: no network driver,
+# no storage driver, and an imager that boots and then cannot reach anything.
+for soname in liblzma.so.5 libzstd.so.1; do
+    lib="$(ldconfig -p | awk -v s="$soname" '$1 == s { print $NF; exit }')"
+    [ -n "$lib" ] || die "kmod needs $soname to decompress modules, and it is not on this system"
+    mkdir -p "$ROOT$(dirname "$lib")"
+    cp -L "$lib" "$ROOT$(dirname "$lib")/"
+done
+
 # --- Kernel modules ---
-# Include the entire module tree so dependency resolution always succeeds across
-# arbitrary hardware (NICs, storage controllers). The initramfs is loaded once
-# into RAM at boot, so a larger tree only costs a one-time transfer.
+# The entire tree, so dependency resolution always succeeds across arbitrary
+# hardware (NICs, storage controllers) -- left compressed exactly as shipped.
 MODSRC="/lib/modules/$KVER"
 mkdir -p "$ROOT/lib/modules/$KVER"
 cp -a "$MODSRC"/. "$ROOT/lib/modules/$KVER/"
-# Debian ships kernel modules compressed (.ko.xz / .ko.zst). busybox modprobe
-# cannot decompress them, so expand them in place, then regenerate dependencies.
-find "$ROOT/lib/modules/$KVER" -name '*.ko.xz'  -exec unxz {} + 2>/dev/null || true
-find "$ROOT/lib/modules/$KVER" -name '*.ko.zst' -exec zstd -d --rm {} + 2>/dev/null || true
-depmod -b "$ROOT" "$KVER" 2>/dev/null || true
+# The real depmod, and it must succeed: modprobe resolves dependencies purely
+# from modules.dep, so a tree without one loads nothing. This was `|| true`, which
+# is survivable only when the initramfs regenerates it at boot -- and busybox's
+# depmod cannot read compressed modules, so that fallback is gone on purpose.
+depmod -b "$ROOT" "$KVER" || die "depmod failed; modprobe would resolve nothing at boot"
+
+# Prove the chain against the tree about to be packed, using the SHIPPED binary
+# and the SHIPPED libraries -- chrooted, so nothing on the build host stands in
+# for something the initramfs is missing. Checking with the host's modprobe would
+# pass with liblzma absent, which is precisely the failure worth catching.
+#
+# Two different things are being proven and both matter:
+#   --show-depends reads modules.dep and resolves dependencies, but never opens a
+#     module, so it says nothing about decompression.
+#   modinfo on a .ko.xz has to decompress it, which is the dlopened-liblzma path.
+# Loading itself needs a running kernel and is the one step left to the machine.
+for probe in ext4 virtio_net e1000; do
+    chroot "$ROOT" /sbin/modprobe -S "$KVER" --show-depends "$probe" >/dev/null 2>&1 \
+        || die "the shipped modprobe cannot resolve '$probe' from the packed module tree"
+done
+SAMPLE="$(find "$ROOT/lib/modules/$KVER" -name 'ext4.ko*' | head -n1)"
+[ -n "$SAMPLE" ] || die "no ext4 module in the tree to verify decompression against"
+chroot "$ROOT" /sbin/modinfo -F description "${SAMPLE#$ROOT}" >/dev/null 2>&1 \
+    || die "the shipped modinfo cannot decompress ${SAMPLE##*/} -- a dlopened decompressor (liblzma/libzstd) is missing from the initramfs"
+log "Module tree: compressed, depmod clean, shipped modprobe resolves and decompresses"
 
 # --- udhcpc callback + init ---
 cp "$HERE/udhcpc.script" "$ROOT/usr/share/udhcpc/default.script"
@@ -99,7 +160,7 @@ chmod +x "$ROOT/init"
 # with.
 log "Packing initramfs"
 TMP_IMG="$OUT/.initramfs.img.$$"
-trap 'rm -f "$TMP_IMG"' EXIT
+trap 'rm -f "$TMP_IMG" "$TMP_KERNEL"' EXIT
 # cpio's stderr is kept. It was discarded, which is what made a bad pack silent
 # -- and a silent bad pack is exactly what ships a broken imager.
 ( cd "$ROOT" && find . | cpio -o -H newc | gzip -9 ) > "$TMP_IMG"
@@ -111,9 +172,13 @@ log "Verifying the packed initramfs"
 "$HERE/verify-initramfs.sh" "$TMP_IMG" \
     || die "the packed initramfs is not bootable; the existing imager has been left in place"
 
-# The publish. Everything above happened beside the live artifact; this is the
-# only moment it changes, and it changes in one step.
+# The publish. Everything above happened beside the live artifacts; this is the
+# only moment they change. Two renames back to back rather than one atomic step,
+# because they are two files -- but the window in which a machine could see a
+# mismatched pair is now the microseconds between these lines, rather than the
+# minutes the build takes.
 mv -f "$TMP_IMG" "$OUT/initramfs.img"
+mv -f "$TMP_KERNEL" "$OUT/vmlinuz"
 trap - EXIT
 
 echo "$KVER" > "$OUT/KERNEL_VERSION"
