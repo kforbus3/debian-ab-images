@@ -16,6 +16,9 @@ COMPRESS ?= zstd
 # Extra packages to install into the image, space-separated
 # (e.g. `make image PACKAGES="vim curl qemu-guest-agent"`)
 PACKAGES ?=
+# Architecture for the netboot imager (amd64 or arm64). The imager is a kernel
+# the target machine executes, so build one per architecture you deploy.
+ARCH ?= amd64
 # Writable state: how much of the root a machine can change, and what the two
 # A/B slots share. overlay (default) = the whole root, shared. stateful = root
 # read-only, /home and /var persist. appliance = root read-only, only /data
@@ -62,8 +65,18 @@ image: ## Build the A/B disk image into ./output (SUITE=, PACKAGES=, ENCRYPT=1, 
 	    $(if $(TANG_URL),--tang-url $(TANG_URL)))
 
 .PHONY: imager
-imager: ## Build the netboot imager (kernel + initramfs) into ./output/imager
-	./imager/run.sh
+imager: ## Build the netboot imager (kernel + initramfs) into ./output/imager (ARCH=amd64|arm64)
+	./imager/run.sh --arch $(ARCH)
+
+.PHONY: bundle
+bundle: ## Build a signed RAUC update bundle from an image in ./output (IMAGE=<filename>, VERSION=)
+	@test -n "$(IMAGE)" || { \
+	  echo "Usage: make bundle IMAGE=<filename in ./output> [VERSION=1.2.3]"; \
+	  echo "  e.g. make bundle IMAGE=debian-trixie-ab.img"; exit 1; }
+	docker build --platform=linux/amd64 -t debian-ab-builder:amd64 builder
+	docker run --rm --privileged -v $(OUTPUT):/output \
+	  --entrypoint /build/make-bundle.sh debian-ab-builder:amd64 \
+	  --image /output/$(IMAGE) $(if $(VERSION),--version $(VERSION))
 
 .PHONY: webui
 webui: ## Start the web management UI on http://localhost:8080 (needs webui/.env)
@@ -98,5 +111,8 @@ server-logs: ## Follow provisioning server logs
 all: image imager ## Build both the A/B image and the imager
 
 .PHONY: clean
-clean: ## Remove build artifacts
-	rm -rf $(OUTPUT)
+clean: ## Remove build artifacts (keeps output/rauc-keys — the update signing key)
+	@if [ -d $(OUTPUT) ]; then \
+	  find $(OUTPUT) -mindepth 1 -maxdepth 1 ! -name rauc-keys -exec rm -rf {} +; \
+	  echo "Kept $(OUTPUT)/rauc-keys: losing the signing key means no further updates for machines already deployed (see docs/UPDATES.md)."; \
+	fi

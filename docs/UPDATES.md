@@ -11,12 +11,18 @@ boot.
 
 - `ORDER` — slot priority, e.g. `A B`
 - `A_TRY` / `B_TRY` — per-slot boot attempt counters
+- `A_PROVEN` / `B_PROVEN` — whether a slot has booted successfully since it
+  was last written
 
-GRUB boots the first slot in `ORDER` whose `TRY` is `0`, setting it to `1` first.
-On a successful boot, `ab-mark-good.service` (a oneshot that runs at
-multi-user) resets the booted slot's counter via `grub-editenv`; a boot that
-never gets that far leaves the counter at `1`, so the next boot falls through
-to the other slot — the basis for safe rollback.
+Probation is armed for updates, not for boots. GRUB boots a **proven** slot
+outright and writes nothing; only an **unproven** slot — one an update has just
+written — goes on probation, with its `TRY` set to `1` and one attempt to make
+good. `ab-mark-good.service` runs before logins are permitted and marks the
+booted slot good (`TRY=0`, `PROVEN=1`); a boot that never gets that far leaves
+the counter set, so the next boot falls back to the slot that was working — the
+basis for safe rollback. Between updates nothing writes to `/boot` at all. The
+reasoning behind this design (and what the earlier every-boot arming got wrong)
+is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Inspecting state
 
@@ -31,6 +37,8 @@ Updates are distributed as signed RAUC bundles, built from an image you have
 already built. In the web UI: **Updates → Build bundle**. On the command line:
 
 ```bash
+make bundle IMAGE=debian-trixie-ab.img          # optionally VERSION=2026.08.16
+# or, with the builder image already built (make bundle builds it for you):
 docker run --rm --privileged -v "$PWD/output":/output \
     --entrypoint /build/make-bundle.sh debian-ab-builder:amd64 \
     --image /output/debian-trixie-ab.img
@@ -72,10 +80,6 @@ predates the key. Two ways out:
   `/etc/rauc/keyring.pem` and retry. `/etc` is on the overlay in every state
   model, so it survives the update, and the image the bundle carries has the
   right certificate baked in anyway.
-
-Keep `output/rauc-keys/` and keep it private. Losing `key.pem` means no further
-updates for machines already deployed; leaking it means someone else can sign an
-update your fleet will install.
 
 Keep `output/rauc-keys/` and keep it private. Losing `key.pem` means no further
 updates for machines already deployed; leaking it means someone else can sign an

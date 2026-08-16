@@ -8,6 +8,32 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUTPUT_DIR:-$HERE/../output}"
 
+# --help must not cost a docker build. The usage text lives in build-image.sh's
+# usage() heredoc; print it from there directly instead of building the image
+# that would otherwise print it minutes from now.
+for a in "$@"; do
+    if [ "$a" = "-h" ] || [ "$a" = "--help" ]; then
+        echo "All arguments are passed through to build-image.sh, which accepts:"
+        echo
+        awk '/^Usage: /{p=1} p{if ($0=="EOF") exit; print}' "$HERE/build-image.sh" \
+            | sed "s|\$0|./builder/run.sh|"
+        exit 0
+    fi
+done
+
+# Everything below happens inside Docker, so say so up front if it is missing
+# or not running — rather than failing partway in with a less helpful error.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "[run] docker is not installed (or not on PATH). Install Docker first:" >&2
+    echo "[run]   https://docs.docker.com/engine/install/" >&2
+    exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+    echo "[run] cannot talk to the Docker daemon. Is it running, and does this" >&2
+    echo "[run] user have permission to use it (docker group, or sudo)?" >&2
+    exit 1
+fi
+
 # The builder container runs as the architecture it is building. debootstrap and
 # every chroot step then execute natively -- on an arm64 host that makes an arm64
 # build as fast as an amd64 one, and on an amd64 host Docker's binfmt handles the

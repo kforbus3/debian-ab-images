@@ -7,6 +7,20 @@
 # The imager is executed by the machine being provisioned, so it has to be built
 # for that machine's architecture: an amd64 imager cannot boot an arm64 box.
 set -euo pipefail
+
+# Everything below happens inside Docker, so say so up front if it is missing
+# or not running — rather than failing partway in with a less helpful error.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "[run] docker is not installed (or not on PATH). Install Docker first:" >&2
+    echo "[run]   https://docs.docker.com/engine/install/" >&2
+    exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+    echo "[run] cannot talk to the Docker daemon. Is it running, and does this" >&2
+    echo "[run] user have permission to use it (docker group, or sudo)?" >&2
+    exit 1
+fi
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUTPUT_DIR:-$HERE/../output}"
 mkdir -p "$OUT"

@@ -5,6 +5,7 @@ switch full of machines and image them all at once** — unattended. Designed fo
 departments and homelabs that need to provision many identical machines quickly
 and reliably.
 
+![CI](https://github.com/kforbus3/debian-ab-images/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
@@ -28,7 +29,8 @@ and reliably.
         ▲                            ▼
         │                    each machine boots the imager, which
         └──── reboots ◀──────  writes the A/B image to its local disk
-              into Debian A/B
+          into the installed
+             A/B system
 ```
 
 ## The A/B image layout
@@ -97,7 +99,10 @@ default slot sizes, far less compressed) and expands to fill each machine's
 disk on first boot; set `IMAGE_SIZE=<GiB>` to force a fixed size.
 
 Supported releases: Debian `trixie` (13) and `bookworm` (12); Ubuntu `resolute`
-(26.04 LTS), `noble` (24.04 LTS), and `jammy` (22.04 LTS).
+(26.04 LTS), `noble` (24.04 LTS), and `jammy` (22.04 LTS). The builder also
+accepts the other Ubuntu suites it can recognize (`bionic`, `focal`,
+`oracular`, `plucky`, `questing`), but those are untested here — the listed
+releases are the ones the boot tests cover.
 
 ### 2. Build the netboot imager
 
@@ -116,7 +121,7 @@ so both can be present at once.
 ```bash
 cd server
 cp .env.example .env
-# Edit .env: set SERVER_IP, IMAGE_FILE, and MODE (proxy or dhcp).
+# Edit .env: set SERVER_IP, INTERFACE, IMAGE_FILE, and MODE (dhcp or proxy).
 docker compose up -d --build
 ```
 
