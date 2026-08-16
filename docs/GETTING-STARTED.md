@@ -42,8 +42,8 @@ systems; on Apple Silicon or other arm64 hosts they run under emulation
 ## 3. Installation
 
 ```bash
-git clone https://github.com/kforbus3/debian-ab-images.git
-cd debian-ab-images
+git clone https://github.com/kforbus3/flipside.git
+cd flipside
 make help          # see every available target
 ```
 

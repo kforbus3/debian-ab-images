@@ -1,3 +1,3 @@
-"""Debian A/B Images web management UI."""
+"""Flipside web management UI."""
 
 __version__ = "0.6.0"

@@ -18,7 +18,7 @@ STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__)
 
 # The SPA is served same-origin (and the vite dev server proxies /api), so no
 # CORS policy is needed — browsers then refuse cross-origin API use outright.
-app = FastAPI(title="Debian A/B Images UI", version=__version__)
+app = FastAPI(title="Flipside UI", version=__version__)
 
 
 @app.get("/api/health")
@@ -76,4 +76,4 @@ async def spa(full_path: str):
     index = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(index):
         return FileResponse(index)
-    return JSONResponse(content={"message": "Debian A/B Images UI API", "version": __version__})
+    return JSONResponse(content={"message": "Flipside UI API", "version": __version__})

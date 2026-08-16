@@ -141,6 +141,6 @@ recoverable from the other. See
 
 Use GitHub's private vulnerability reporting: **Report a vulnerability** under
 the repository's Security tab
-(<https://github.com/kforbus3/debian-ab-images/security/advisories/new>), with
+(<https://github.com/kforbus3/flipside/security/advisories/new>), with
 reproduction steps and the affected commit. Expect an acknowledgment within a
 few days; confirmed issues are fixed before public disclosure.

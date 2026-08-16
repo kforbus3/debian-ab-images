@@ -1132,7 +1132,7 @@ if [ ! -f "$RAUC_CERT" ] && [ "$RAUC_CERT" = "/output/rauc-keys/cert.pem" ]; the
     mkdir -p "$RAUC_KEYDIR"
     openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 3650 \
         -keyout "$RAUC_KEYDIR/key.pem" -out "$RAUC_CERT" \
-        -subj "/O=debian-ab-images/CN=A-B Update Signing" >/dev/null 2>&1 \
+        -subj "/O=flipside/CN=A-B Update Signing" >/dev/null 2>&1 \
         || log "WARNING: could not generate a signing key"
     chmod 600 "$RAUC_KEYDIR/key.pem" 2>/dev/null || true
 fi

@@ -1,4 +1,4 @@
-# Contributing to Debian A/B Images
+# Contributing to Flipside
 
 Thanks for your interest in improving this project!
 

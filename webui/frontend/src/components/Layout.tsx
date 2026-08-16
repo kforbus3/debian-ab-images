@@ -35,7 +35,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="flex h-full">
       <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/40">
         <div className="flex items-center gap-2 px-5 py-4">
-          <Boxes className="text-brand-400" /><span className="font-semibold tracking-tight">A/B Images</span>
+          <Boxes className="text-brand-400" /><span className="font-semibold tracking-tight">Flipside</span>
         </div>
         <nav className="flex-1 space-y-0.5 px-3 py-2">
           {NAV.map((n) => (

@@ -1,11 +1,14 @@
-# Debian A/B Images
+# Flipside
 
 Build a Debian or Ubuntu A/B (dual-root) disk image once, then **netboot a whole
-switch full of machines and image them all at once** — unattended. Designed for IT
-departments and homelabs that need to provision many identical machines quickly
-and reliably.
+switch full of machines and image them all at once** — unattended. Updates are
+signed, atomic, and health-gated: a healthy machine keeps its side, and a bad
+update boots the flip side. Designed for IT departments and homelabs that need
+to provision many identical machines quickly and reliably.
 
-![CI](https://github.com/kforbus3/debian-ab-images/actions/workflows/ci.yml/badge.svg)
+*Formerly `debian-ab-images` — old clone URLs redirect.*
+
+![CI](https://github.com/kforbus3/flipside/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 

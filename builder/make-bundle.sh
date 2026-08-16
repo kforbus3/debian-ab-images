@@ -79,7 +79,7 @@ if [ ! -f "$KEYDIR/key.pem" ] || [ ! -f "$KEYDIR/cert.pem" ]; then
     log "Generating a signing key in $KEYDIR (keep it: images trust this cert)"
     openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 3650 \
         -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem" \
-        -subj "/O=debian-ab-images/CN=A-B Update Signing" 2>/dev/null
+        -subj "/O=flipside/CN=A-B Update Signing" 2>/dev/null
     chmod 600 "$KEYDIR/key.pem"
 fi
 
