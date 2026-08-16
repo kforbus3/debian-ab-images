@@ -111,7 +111,13 @@ jobs:
           from app import routers
 
           client = TestClient(app)
+          # Routes included via include_router used to appear flattened in
+          # app.routes; FastAPI 0.141 nests them inside _IncludedRouter
+          # objects with no path, which made every router look unmounted.
+          # The OpenAPI schema always carries the full prefixed paths, so
+          # take the union of both views.
           paths = {r.path for r in app.routes if getattr(r, "path", "").startswith("/api")}
+          paths |= set(app.openapi().get("paths", {}))
 
           # Every router module must actually be mounted. A router that is
           # imported but left out of the app answers 404 with a body that reads
