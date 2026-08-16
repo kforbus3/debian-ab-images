@@ -31,7 +31,7 @@ case "$ARCH" in
 esac
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq "$QEMU_PKG" "$FW_PKG" gdisk util-linux e2fsprogs grub-common \
-    >/dev/null 2>&1
+    cryptsetup-bin >/dev/null 2>&1
 
 # poweroff        -- boot, let it settle, power off. The control.
 # hostname-reboot -- the reported recipe: boot once, `hostnamectl set-hostname`,
@@ -99,7 +99,55 @@ attach() {
     done
     [ -n "$BOOTP" ] || fail "no partition labelled BOOT"
 }
-detach() { losetup -d "$LO" 2>/dev/null; }
+detach() {
+    local m
+    for m in $MAPPED; do cryptsetup close "$m" 2>/dev/null; done
+    MAPPED=""
+    losetup -d "$LO" 2>/dev/null
+}
+
+# Encrypted images keep the slot and overlay filesystems inside LUKS
+# containers, so the labels the loops below match on are invisible until the
+# containers are opened -- an unopened image reads as "no slots at all" and the
+# probe is silently installed nowhere. The key is taken the way the machine
+# itself gets it: the keyfile the builder leaves on the plaintext BOOT
+# partition (--unlock keyfile), falling back to the build passphrase in $PASS.
+# Unencrypted images have no LUKS containers and both loops are no-ops.
+PASS="${PASS:-testluks}"                 # --luks-passphrase used at build time
+MAPPED=""
+open_luks() {
+    local n dev name i=0 key=""
+    mkdir -p /mnt/bootk
+    if mount -o ro "$BOOTP" /mnt/bootk 2>/dev/null; then
+        if [ -f /mnt/bootk/ab-keys/luks.key ]; then
+            cp /mnt/bootk/ab-keys/luks.key /tmp/slot-luks.key
+            key=/tmp/slot-luks.key
+        fi
+        umount /mnt/bootk
+    fi
+    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
+        dev="/dev/${BB}p$n"
+        cryptsetup isLuks "$dev" 2>/dev/null || continue
+        i=$((i+1)); name="slotcheck-$i"
+        if [ -n "$key" ] && cryptsetup open --key-file "$key" "$dev" "$name" 2>/dev/null; then
+            :
+        elif printf '%s' "$PASS" | cryptsetup open "$dev" "$name" - 2>/dev/null; then
+            :
+        else
+            fail "cannot open LUKS container $dev (tried the BOOT keyfile and \$PASS)"
+        fi
+        MAPPED="$MAPPED $name"
+    done
+}
+
+devs() {   # every filesystem-bearing device: plain partitions, then opened LUKS
+    local n m
+    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
+        cryptsetup isLuks "/dev/${BB}p$n" 2>/dev/null && continue
+        echo "/dev/${BB}p$n"
+    done
+    for m in $MAPPED; do echo "/dev/mapper/$m"; done
+}
 
 grubenv_get() {                # grubenv_get <VAR>
     attach
@@ -124,12 +172,13 @@ grubenv_dump() {
 # make this test measure its own timing rather than the machine's.
 install_probe() {
     attach
-    local slots="" n
+    open_luks
+    local slots="" d
     mkdir -p /mnt/slot
-    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
-        mount "/dev/${BB}p$n" /mnt/slot 2>/dev/null || continue
+    for d in $(devs); do
+        mount "$d" /mnt/slot 2>/dev/null || continue
         if [ -d /mnt/slot/usr/local/sbin ] && [ -d /mnt/slot/etc/systemd/system ]; then
-            slots="$slots $n"
+            slots="$slots ${d##*/}"
             cat > /mnt/slot/usr/local/sbin/ab-slot-probe.sh <<PROBE
 #!/bin/sh
 exec > /dev/console 2>&1
@@ -230,6 +279,10 @@ UNIT
     done
     detach
     echo "  probe installed in slot partition(s):$slots"
+    # An empty list means every boot below runs probeless to its timeout and
+    # the failure reads as "the probe never ran" -- fail here, where the cause
+    # is, not three ten-minute boots later.
+    [ -n "$slots" ] || fail "no slot filesystem found to install the probe into"
 }
 
 boot() {                       # boot <label>
@@ -264,11 +317,12 @@ boot() {                       # boot <label>
 # overlay partition is the reliable source; the console is only a convenience.
 probe_slot() {                 # probe_slot <stage>
     attach
+    open_luks
     mkdir -p /mnt/o
-    local v=""
-    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
-        [ "$(blkid -o value -s LABEL "/dev/${BB}p$n" 2>/dev/null)" = overlay ] || continue
-        mount "/dev/${BB}p$n" /mnt/o 2>/dev/null || break
+    local v="" d
+    for d in $(devs); do
+        [ "$(blkid -o value -s LABEL "$d" 2>/dev/null)" = overlay ] || continue
+        mount "$d" /mnt/o 2>/dev/null || break
         v=$(sed -n 's/^stage=[0-9]* slot=//p' "/mnt/o/probe-$1.txt" 2>/dev/null | tr -d "\r")
         umount /mnt/o
         break
@@ -279,10 +333,12 @@ probe_slot() {                 # probe_slot <stage>
 
 probe_report() {               # probe_report <stage>
     attach
+    open_luks
     mkdir -p /mnt/o
-    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
-        [ "$(blkid -o value -s LABEL "/dev/${BB}p$n" 2>/dev/null)" = overlay ] || continue
-        mount "/dev/${BB}p$n" /mnt/o 2>/dev/null || break
+    local d
+    for d in $(devs); do
+        [ "$(blkid -o value -s LABEL "$d" 2>/dev/null)" = overlay ] || continue
+        mount "$d" /mnt/o 2>/dev/null || break
         sed 's/^/      /' "/mnt/o/probe-$1.txt" 2>/dev/null
         umount /mnt/o
         break
@@ -304,10 +360,12 @@ prime_rollback() {
         || fail "could not stage the pending slot"
     echo "  staged: ORDER=B A, B_PROVEN=0 (what ab-slot-pending.sh writes)"
     umount /mnt/bootp
-    local n
-    for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
-        [ "$(blkid -o value -s LABEL "/dev/${BB}p$n" 2>/dev/null)" = rootfs-b ] || continue
-        mount "/dev/${BB}p$n" /mnt/slot || fail "mount rootfs-b"
+    open_luks
+    local d staged=""
+    for d in $(devs); do
+        [ "$(blkid -o value -s LABEL "$d" 2>/dev/null)" = rootfs-b ] || continue
+        staged=1
+        mount "$d" /mnt/slot || fail "mount rootfs-b"
         if [ "$MODE" = health-fail ]; then
             # Nothing masked and nothing broken: the slot boots perfectly and a
             # health check says it is not fit to keep. That is the only thing
@@ -328,6 +386,9 @@ prime_rollback() {
         break
     done
     detach
+    # A rollback test whose staging silently did nothing would "pass" by
+    # watching a healthy machine boot slot B twice.
+    [ -n "$staged" ] || fail "no filesystem labelled rootfs-b to stage the rollback in"
 }
 
 # What imager/init writes to the BOOT partition after dd'ing the image, for a
