@@ -2,7 +2,75 @@
 
 Notable changes per release. Dates are the tag date.
 
-## Unreleased
+## v0.7.0 — 2026-08-16
+
+**The project is now Flipside** (formerly `debian-ab-images` — old URLs
+redirect). The old name undersold three of the product's four halves and read
+as a file collection rather than a system; the new one names the mechanism —
+a healthy machine keeps its side, and a bad update boots the flip side.
+Deliberately unchanged, the way any rename that respects deployed machines
+must be: the `debian-ab-builder` image tags, the `ab-*` script names, the
+`dab-` container prefix, and the `LUKS_KV_PREFIX` default (existing recovery
+passphrases live under that path in the secrets manager).
+
+**The update signing key is no longer served to the imaging segment.** `output/`
+is both the web UI's working directory and the HTTP root's `/images`, and the
+provisioning listener served it with a directory listing and no deny rules — so
+the RAUC signing private key (`output/rauc-keys/key.pem`), the secrets-manager
+token (`.secrets-store.json`), the fleet record and the assignment table were
+all one unauthenticated GET away from anything on the imaging network. The key
+is the sharp one: whoever holds it signs bundles the whole fleet installs, and
+the certificate baked into every image cannot be rotated without re-imaging.
+
+The listener now denies `rauc-keys/`, dotfiles, the fleet record and the
+assignment table, and the listing is off — everything a machine fetches is
+named by an iPXE script or an assignment, never enumerated. The route test
+mounts a fixture `output/` into the real container and asserts each secret
+404s while images and bundles still serve; against the old configuration it
+fails six ways.
+
+**`make clean` no longer deletes the signing key.** It removed all of
+`output/`, which included `rauc-keys/` — the key whose loss permanently orphans
+every deployed machine, as UPDATES.md has always warned. `clean` now keeps
+`rauc-keys/` and says so.
+
+**The nightly boot tests can see inside encrypted images again — which is to
+say, for the first time.** The nightly builds its test image with `--encrypt`,
+but the slot-stability harness mounted raw partitions and matched filesystem
+labels, both invisible inside a LUKS container. The probe was installed into
+zero slots — the harness said so, in an empty list, and carried on — and every
+boot then ran probeless to its ten-minute timeout. Every scheduled nightly
+since the test landed failed this way; the push/PR job never runs the boot
+suite, so nothing caught it. The harness now opens the containers the way the
+machine itself does (the keyfile on the plaintext BOOT partition, then the
+build passphrase), and the two silent no-ops — a probe installed nowhere, a
+rollback staged into a rootfs-b that was never found — are hard failures at
+the cause rather than three boots later.
+
+**Smaller hardening, found in the same audit:**
+
+- The build command quoted every argument except the output name, and the
+  default name was built from unsanitised `distro`/`suite`. Admin-only surface,
+  but now sanitised and quoted like everything else, with a test.
+- The CI workflow token is `contents: read` — nothing in it writes.
+- `starlette` is pinned exactly, like every other backend dependency, and
+  Dependabot now watches pip, npm, the workflow actions and all five
+  Dockerfiles weekly.
+
+**The docs now match the code.** The required `INTERFACE` variable is in the
+first-run instructions (the server refuses to start without it); `dhcp` is
+documented as the default mode it actually is; the slot-selection explanation
+describes the v0.6.0 PROVEN/TRY mechanism instead of the one it replaced; the
+imager-options table gained `imager.hostname=` and `imager.report=`; and there
+is a "Backing up the server" section that names the files worth keeping —
+starting with `rauc-keys/`.
+
+**Smaller usability work:** `make bundle` builds a signed update bundle without
+knowing the docker incantation; `make imager ARCH=arm64` works; `./builder/run.sh
+--help` prints help without building a container first; both entry scripts check
+for a working Docker daemon before doing anything; the README carries a CI badge;
+and reporting a vulnerability now has a real channel (GitHub private
+vulnerability reporting) instead of "contact the maintainer".
 
 **The imager initramfs is a quarter of the size it was.** On amd64 it unpacks to
 **113 MB instead of 502 MB**, and the download dropped from 123.5 MB to 97.3 MB.
