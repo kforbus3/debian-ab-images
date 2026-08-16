@@ -23,7 +23,7 @@ export default function Login() {
       <Card className="w-full max-w-sm p-8">
         <div className="mb-6 flex flex-col items-center gap-2 text-center">
           <Boxes className="text-brand-400" size={32} />
-          <h1 className="text-lg font-semibold">Debian A/B Images</h1>
+          <h1 className="text-lg font-semibold">Flipside</h1>
           <p className="text-xs text-zinc-500">Sign in to manage images & provisioning</p>
         </div>
         <form onSubmit={submit} className="space-y-4">
