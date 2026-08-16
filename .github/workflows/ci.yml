@@ -18,6 +18,10 @@ on:
     - cron: "0 6 * * *"      # nightly boot tests
   workflow_dispatch:
 
+# Nothing here writes to the repository; the default token grants far more.
+permissions:
+  contents: read
+
 jobs:
   checks:
     name: Static checks

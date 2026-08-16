@@ -1,0 +1,34 @@
+# Weekly dependency-update PRs, grouped so a routine week is one PR per
+# ecosystem rather than ten. Security updates arrive regardless of schedule.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /webui/backend
+    schedule:
+      interval: weekly
+    groups:
+      backend:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /webui/frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directories:
+      - /builder
+      - /imager
+      - /server/http
+      - /server/dnsmasq
+      - /webui   # single Dockerfile for the backend+frontend stack
+    schedule:
+      interval: weekly

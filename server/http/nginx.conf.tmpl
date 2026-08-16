@@ -5,11 +5,37 @@ server {
     listen ${SERVER_IP}:80 default_server;
     server_name _;
     root /srv/http;
-    autoindex on;
+    # No directory listing: everything a machine fetches -- images, the imager,
+    # per-MAC scripts, bundles -- is named by an iPXE script or an assignment,
+    # never enumerated. A listing only advertises what else lives under
+    # output/, which is the web UI's working directory, not a public library.
+    autoindex off;
     sendfile on;
 
     # Web UI job logs live under output/jobs — not for PXE clients.
     location ^~ /images/jobs/ {
+        return 404;
+    }
+
+    # The RAUC signing keypair lives in output/rauc-keys so the builder can
+    # find it, and output/ is this root's /images -- so without this block the
+    # private key that signs every update the fleet trusts is one GET away
+    # from anything on the imaging segment. Nothing on the wire ever needs it:
+    # machines carry the certificate, not the key.
+    location ^~ /images/rauc-keys/ {
+        return 404;
+    }
+
+    # The fleet record and per-machine assignments are the web UI's state, not
+    # boot material; machines fetch only their own /hosts/<mac>.ipxe.
+    location = /images/deployments.jsonl { return 404; }
+    location = /images/hosts/assignments.json { return 404; }
+    location = /hosts/assignments.json { return 404; }
+
+    # Hidden files anywhere under the root. The concrete one is
+    # output/.secrets-store.json -- the web UI's secrets-manager config,
+    # including its token -- but nothing legitimate fetches dotfiles at all.
+    location ~ /\. {
         return 404;
     }
 

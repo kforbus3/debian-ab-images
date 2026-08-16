@@ -17,6 +17,7 @@ in rising order of how much it costs:
 None of that announced itself. These assert that it cannot happen again.
 """
 import os
+import re
 import sys
 import tempfile
 
@@ -134,8 +135,26 @@ check("opts carries the resolved name", o.get("name") == resolved, o.get("name")
 check("image_output_name agrees", orch.image_output_name(o) == resolved,
       orch.image_output_name(o))
 cmd, _label, _env = orch.build_image_cmd(o)
-check("the build command writes that file", f"--output /output/{resolved}" in " ".join(cmd),
-      " ".join(cmd)[-120:])
+joined = " ".join(cmd)
+check("the build command writes that file",
+      f"--output '/output/{resolved}'" in joined or f"--output /output/{resolved}" in joined,
+      joined[-120:])
+
+print("== distro/suite cannot smuggle shell into the build command ==")
+# The explicit-name branch always sanitised; the default-name branch built
+# f"{distro}-{suite}-{arch}-ab" raw, and build_image_cmd appended it to a
+# bash -c script unquoted while every other argument went through _q().
+# Admin-only today, but a latent injection the moment these options are
+# reachable by anything less trusted.
+clear()
+o = {"distro": "debian; touch /tmp/pwned", "suite": "trixie$(id)", "arch": "amd64"}
+got = orch.resolve_output_name(o)
+check("the default name is reduced to safe characters",
+      re.fullmatch(r"[A-Za-z0-9._-]+\.img", got) is not None, got)
+cmd, _label, _env = orch.build_image_cmd(o)
+after = cmd[-1].rsplit("--output", 1)[-1].strip().splitlines()[0].strip()
+check("the --output argument is exactly the safe path, quoted",
+      after in (f"/output/{got}", f"'/output/{got}'"), after[:100])
 
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
