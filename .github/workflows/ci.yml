@@ -283,7 +283,12 @@ jobs:
     # faster here than on a developer's arm64 laptop.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Generous on purpose. 90 was enough only while the slot-stability step
+    # failed fast; a suite that actually reaches the encrypted cross-build
+    # runs well past it, and a timeout reports as "cancelled" with no
+    # annotation anywhere near the step that was running -- two full runs
+    # were written off as mystery cancellations before the number was found.
+    timeout-minutes: 210
     steps:
       - uses: actions/checkout@v4
 
