@@ -56,12 +56,17 @@ make image HOSTNAME=node USERNAME=admin PASSWORD='ChangeMe123'
 # → output/debian-trixie-ab.img.zst  (+ .sha256 and .json sidecars)
 ```
 
+The default is a minimal headless system; `PROFILE=server` adds a small
+server toolkit and `PROFILE=desktop DESKTOP=kde` builds a full graphical
+desktop instead.
+
 Key variables (all optional; see [BUILDER.md](BUILDER.md) for the full list):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SUITE` | `trixie` | `trixie`/`bookworm` (Debian), `resolute`/`noble`/`jammy` (Ubuntu) |
 | `USERNAME` / `PASSWORD` | `debian`/`debian` | Login user (gets sudo; root is locked). **Always set a real password.** |
+| `PROFILE` / `DESKTOP` | `minimal` | What the image is for: `minimal` (the base system), `server` (headless tools), or `desktop` with `DESKTOP=gnome`/`kde`/… for a graphical login — see [BUILDER.md](BUILDER.md#profiles) |
 | `PACKAGES` | — | Extra packages baked into the image, e.g. `PACKAGES="vim curl qemu-guest-agent"` |
 | `IMAGE_SIZE` | `auto` | `auto` builds the smallest possible image (≈7 GiB raw); it expands on first boot |
 | `ROOT_SIZE` | `3072` | MiB per root slot — raise it if you bake in large package sets |

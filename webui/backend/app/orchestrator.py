@@ -481,6 +481,37 @@ LOW_DISK_GB = 12.0
 
 
 # --------------------------- builds ---------------------------
+# Build profiles, and the desktop environments each distro can actually
+# provide. This is the same mapping build-image.sh enforces; validating against
+# it here means an impossible combination is a 400 with the available choices
+# in it, rather than a die() twenty minutes into a build the operator has
+# already walked away from. The values are the metapackage each choice
+# installs — the UI never needs them, but the docs and tests read them from
+# here so there is one copy of the mapping on this side, not two.
+PROFILES = ("minimal", "server", "desktop")
+DESKTOP_ENVS: dict[str, dict[str, str]] = {
+    "debian": {
+        "gnome": "task-gnome-desktop",
+        "kde": "task-kde-desktop",
+        "xfce": "task-xfce-desktop",
+        "mate": "task-mate-desktop",
+        "cinnamon": "task-cinnamon-desktop",
+        "lxqt": "task-lxqt-desktop",
+    },
+    "ubuntu": {
+        "gnome": "ubuntu-desktop-minimal",
+        "kde": "kde-plasma-desktop",
+        "xfce": "xubuntu-core",
+        "mate": "ubuntu-mate-core",
+        "lxqt": "lubuntu-desktop",
+    },
+}
+# Mirrors build-image.sh's desktop floor: a desktop tree is several GiB
+# installed, and the builder raises the slot to this. Validating image_size
+# against the raised number keeps the "image too small" check honest.
+MIN_ROOT_DESKTOP_MIB = 10240
+
+
 class NameInUse(Exception):
     """An explicitly requested image name already exists in the library."""
 
@@ -590,6 +621,13 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         "--arch", arch,
     ]
     env = {"PASSWORD": opts.get("password", "debian")}
+    # The default profile adds no arguments at all, so a build request that
+    # never heard of profiles produces exactly the command it always has.
+    profile = str(opts.get("profile") or "minimal")
+    if profile != "minimal":
+        args += ["--profile", profile]
+        if profile == "desktop" and opts.get("desktop"):
+            args += ["--desktop", str(opts["desktop"])]
     if opts.get("packages"):
         args += ["--packages", opts["packages"]]
     if opts.get("ssh_key"):

@@ -24,10 +24,39 @@ const SUITES: Record<string, { value: string; label: string }[]> = {
   ],
 };
 
+// Mirrors the backend's mapping (app/orchestrator.py DESKTOP_ENVS): which
+// desktop environments each distro can actually provide. The server refuses
+// anything off this list with a 400, so the select only ever offers what will
+// build — Ubuntu has no Cinnamon flavour, and showing it would turn a distro
+// switch into an error message.
+const DESKTOPS: Record<string, { value: string; label: string }[]> = {
+  debian: [
+    { value: "gnome", label: "GNOME" },
+    { value: "kde", label: "KDE Plasma" },
+    { value: "xfce", label: "Xfce" },
+    { value: "mate", label: "MATE" },
+    { value: "cinnamon", label: "Cinnamon" },
+    { value: "lxqt", label: "LXQt" },
+  ],
+  ubuntu: [
+    { value: "gnome", label: "GNOME (Ubuntu desktop)" },
+    { value: "kde", label: "KDE Plasma" },
+    { value: "xfce", label: "Xfce (Xubuntu)" },
+    { value: "mate", label: "MATE (Ubuntu MATE)" },
+    { value: "lxqt", label: "LXQt (Lubuntu)" },
+  ],
+};
+
+// The builder raises a desktop build's root slot to this floor — a desktop
+// tree is several GiB installed. Mirrored here so the size math below warns
+// about the build that will actually happen.
+const DESKTOP_MIN_ROOT = 10240;
+
 export default function Build() {
   const toast = useToast();
   const [opts, setOpts] = useState({
     distro: "debian", suite: "trixie", arch: "amd64",
+    profile: "minimal", desktop: "gnome",
     name: "", replace: false,
     hostname: "debian-ab", username: "admin", password: "",
     image_size: 0, root_size: 3072, compress: "zstd", packages: "",
@@ -89,7 +118,12 @@ export default function Build() {
 
   async function startImage() {
     try {
-      const { data } = await api.post("/builds", opts);
+      // The desktop field only means anything with the desktop profile, and
+      // the server refuses the pair rather than guessing — so it is not sent
+      // at all for the other profiles, where it is just the select's memory.
+      const { desktop, ...rest } = opts;
+      const payload = opts.profile === "desktop" ? { ...rest, desktop } : rest;
+      const { data } = await api.post("/builds", payload);
       // Said once, at the moment it becomes true. The passphrase is written
       // before the build starts, so this is already a fact rather than a plan.
       if (data.passphrase_stored_at) toast.success(`Passphrase stored at ${data.passphrase_stored_at}`);
@@ -139,7 +173,8 @@ export default function Build() {
   // installs). Mirror that here so the size warning and the note below reflect
   // what will actually be built rather than what was typed.
   const MIN_ROOT: Record<string, number> = { ubuntu: 5120, debian: 2560 };
-  const minRoot = MIN_ROOT[opts.distro] ?? 2560;
+  const minRoot = Math.max(MIN_ROOT[opts.distro] ?? 2560,
+                           opts.profile === "desktop" ? DESKTOP_MIN_ROOT : 0);
   const effRoot = Math.max(+opts.root_size || 0, minRoot);
   const rootRaised = effRoot > (+opts.root_size || 0);
   const neededMiB = 2 * effRoot + 512 + 128 + 2 + 256;
@@ -148,6 +183,9 @@ export default function Build() {
   const setDistro = (d: string) => setOpts((o) => ({
     ...o, distro: d, suite: SUITES[d][0].value,
     hostname: o.hostname === `${o.distro}-ab` ? `${d}-ab` : o.hostname,
+    // A desktop the new distro does not package would be refused server-side;
+    // fall back to GNOME, which both provide, rather than carrying a stale pick.
+    desktop: DESKTOPS[d].some((x) => x.value === o.desktop) ? o.desktop : "gnome",
   }));
 
   return (
@@ -203,6 +241,47 @@ export default function Build() {
               </Select>
             </div>
             <div><Label>Compression</Label><Select value={opts.compress} onChange={(e) => set("compress", e.target.value)}><option value="zstd">zstd</option><option value="gzip">gzip</option><option value="none">none</option></Select></div>
+            {/* What the image is for, as a named package set. Minimal is
+                exactly the base system this builder has always produced —
+                choosing it changes nothing — so the default stays honest for
+                existing users while server/desktop are visible choices rather
+                than package lists everyone retypes. */}
+            <div>
+              <Label>Profile</Label>
+              <Select value={opts.profile} onChange={(e) => set("profile", e.target.value)}>
+                <option value="minimal">Minimal (base system)</option>
+                <option value="server">Server (headless tools)</option>
+                <option value="desktop">Desktop (graphical login)</option>
+              </Select>
+            </div>
+            {opts.profile === "desktop" && (
+              <div>
+                <Label>Desktop environment</Label>
+                {/* Options depend on the distro above: the backend refuses a
+                    combination the distro does not package, so nothing
+                    unbuildable is offered here. */}
+                <Select value={opts.desktop} onChange={(e) => set("desktop", e.target.value)}>
+                  {DESKTOPS[opts.distro].map((d) => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            {opts.profile === "server" && (
+              <p className="col-span-2 text-xs text-zinc-500">
+                Adds a small headless-admin set on top of the base system: rsync,
+                htop, less, nano, tmux. SSH and curl are already in every image.
+              </p>
+            )}
+            {opts.profile === "desktop" && (
+              <p className="col-span-2 text-xs text-zinc-500">
+                Installs a full graphical environment with display manager and
+                NetworkManager{opts.distro === "debian" ? ", plus common wifi firmware for laptops" : ""}.
+                The desktop metapackage pulls a large dependency tree — the root
+                slot is raised to {DESKTOP_MIN_ROOT} MiB and the build takes
+                considerably longer.
+              </p>
+            )}
             {/* Fields are grouped rather than left to flow in source order: the
                 two-column grid had put Username and Password diagonally opposite
                 each other, and left Root slot size alone in a half-empty row.
@@ -484,8 +563,10 @@ export default function Build() {
             Image too small: two {effRoot} MiB root slots + boot + overlay need ≈{Math.ceil(neededMiB / 1024)} GiB.
           </p>}
           {rootRaised && <p className="mt-2 text-xs text-zinc-500">
-            Root slot will be raised to {effRoot} MiB — {opts.distro === "ubuntu" ? "Ubuntu" : "this distribution"}
-            {" "}needs it for the kernel and firmware. Expect a ≈{Math.ceil(neededMiB / 1024)} GiB image.
+            Root slot will be raised to {effRoot} MiB — {opts.profile === "desktop"
+              ? "a full desktop environment needs it"
+              : opts.distro === "ubuntu" ? "Ubuntu needs it for the kernel and firmware"
+              : "this distribution needs it"}. Expect a ≈{Math.ceil(neededMiB / 1024)} GiB image.
           </p>}
         </Card>
         <Card className="p-5">
