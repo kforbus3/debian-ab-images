@@ -29,6 +29,7 @@ bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 cleanup() {
     docker rm -f "$STUB" "$HTTP" >/dev/null 2>&1
     docker network rm "$NET" >/dev/null 2>&1
+    [ -n "${DATA:-}" ] && rm -rf "$DATA"
 }
 trap cleanup EXIT
 cleanup
@@ -107,6 +108,54 @@ if docker logs "$STUB" 2>&1 | grep -q "HIT DELETE"; then
 else
     ok "DELETE /api/imaging/<id> never reached the web UI (exact match holds)"
 fi
+
+echo ""
+echo "== secrets that live under output/ are not served to the imaging segment =="
+# output/ is mounted at /data and symlinked to /images, so everything the web
+# UI keeps there shares a root with the image library. The RAUC signing
+# private key is the sharpest case: anything on the imaging segment that could
+# GET /images/rauc-keys/key.pem could sign bundles the whole fleet installs,
+# and the certificate baked into every image cannot be rotated without
+# re-imaging. This ran with autoindex on and no deny rules for months.
+DATA="$REPO/output/route-test-data"
+rm -rf "$DATA"
+mkdir -p "$DATA/rauc-keys" "$DATA/hosts" "$DATA/jobs" "$DATA/bundles"
+echo "FAKE SIGNING KEY"   > "$DATA/rauc-keys/key.pem"
+echo '{"token":"secret"}' > "$DATA/.secrets-store.json"
+echo '{"event":"imaged"}' > "$DATA/deployments.jsonl"
+echo '{}'                 > "$DATA/hosts/assignments.json"
+echo "job log"            > "$DATA/jobs/job-1.log"
+echo "IMAGE BYTES"        > "$DATA/test-ab.img"
+echo "BUNDLE"             > "$DATA/bundles/test.raucb"
+# Read-only on purpose: the entrypoint must cope with a /data it cannot write
+# (its mkdirs are -p over directories that already exist).
+docker rm -f "$HTTP" >/dev/null 2>&1
+docker run -d --name "$HTTP" --network "$NET" \
+    -e SERVER_IP=0.0.0.0 -e IMAGE_FILE=none.img -e "WEBUI_ADDR=$STUB:8080" \
+    -v "$DATA":/data:ro \
+    "$IMG" >/dev/null
+for _ in $(seq 1 40); do
+    docker run --rm --network "$NET" curlimages/curl:latest -s -o /dev/null \
+        --max-time 2 "http://$HTTP/health" 2>/dev/null && break
+    sleep 0.5
+done
+for path in /images/rauc-keys/key.pem /images/.secrets-store.json \
+            /images/deployments.jsonl /images/hosts/assignments.json \
+            /hosts/assignments.json /images/jobs/job-1.log; do
+    code=$(req GET "$path")
+    [ "$code" = "404" ] && ok "GET $path -> 404" \
+                        || bad "GET $path -> $code; a server-side secret is published to the imaging network"
+done
+# The deny rules must not take the things machines DO fetch with them.
+code=$(req GET /images/test-ab.img)
+[ "$code" = "200" ] && ok "GET /images/test-ab.img -> 200 (images still served)" \
+                    || bad "GET /images/test-ab.img -> $code; the deny rules broke the image library"
+code=$(req GET /bundles/test.raucb)
+[ "$code" = "200" ] && ok "GET /bundles/test.raucb -> 200 (bundles still served)" \
+                    || bad "GET /bundles/test.raucb -> $code; the deny rules broke bundle serving"
+code=$(req GET /images/)
+[ "$code" != "200" ] && ok "GET /images/ -> $code (no directory listing)" \
+                     || bad "GET /images/ -> 200; the directory listing is back"
 
 echo ""
 echo "== a WEBUI_ADDR that cannot resolve must not take PXE down =="

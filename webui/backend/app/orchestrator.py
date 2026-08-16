@@ -547,6 +547,9 @@ def resolve_output_name(opts: dict) -> str:
 
     base = (f"{opts.get('distro', 'debian')}-{opts.get('suite', 'trixie')}-"
             f"{opts.get('arch', 'amd64')}-ab")
+    # Same sanitization as the explicit-name branch: distro/suite are not
+    # otherwise constrained, and this string ends up in a shell command line.
+    base = re.sub(r"[^A-Za-z0-9._-]", "-", base).strip("-.") or "image"
     opts["name"] = _free_name(base)
     return opts["name"]
 
@@ -643,7 +646,7 @@ def build_image_cmd(opts: dict) -> tuple[list[str], str, dict]:
         # being customized with.
         + f"-v {_q(host_overlay_dir())}:/overlay.d:ro "
         + "-e PASSWORD -e LUKS_PASS "
-        + f"debian-ab-builder:{arch} {' '.join(_q(a) for a in args)} --output /output/{out_name}\n"
+        + f"debian-ab-builder:{arch} {' '.join(_q(a) for a in args)} --output {_q('/output/' + out_name)}\n"
     )
     label = f"Build {distro}/{suite} {arch} image ({opts.get('hostname', f'{distro}-ab')})"
     return ["bash", "-c", script], label, env
