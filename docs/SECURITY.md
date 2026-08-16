@@ -41,6 +41,8 @@ requests) and restrict it to one interface with `INTERFACE=`.
 - Web UI sessions are JWTs; live log streams use short-lived (60 s) per-job
   tokens in the query string instead of the session token. Failed logins are
   rate-limited.
+- The OpenAPI schema at `/docs` is intentionally readable without login; every
+  endpoint it describes requires auth.
 - For UEFI Secure Boot targets you must sign the iPXE binary / use a signed
   shim chain; by default, disable Secure Boot on the targets during imaging.
 
@@ -137,5 +139,8 @@ recoverable from the other. See
 
 ## Reporting a vulnerability
 
-Report security issues privately to the maintainer with reproduction steps and the
-affected commit.
+Use GitHub's private vulnerability reporting: **Report a vulnerability** under
+the repository's Security tab
+(<https://github.com/kforbus3/debian-ab-images/security/advisories/new>), with
+reproduction steps and the affected commit. Expect an acknowledgment within a
+few days; confirmed issues are fixed before public disclosure.

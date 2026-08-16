@@ -12,11 +12,13 @@ Thanks for your interest in improving this project!
 ## Project layout
 
 ```
-builder/   Docker build → bootable Debian A/B image
-imager/    Docker build → netboot kernel + initramfs
-server/    docker compose → dnsmasq (PXE/DHCP) + nginx (HTTP)
-docs/      Architecture, deployment, builder, updates, security
-scripts/   Helpers (e.g. QEMU end-to-end test)
+builder/    Docker build → bootable Debian/Ubuntu A/B image
+imager/     Docker build → netboot kernel + initramfs
+server/     docker compose → dnsmasq (PXE/DHCP) + nginx (HTTP)
+webui/      docker compose → FastAPI backend + React frontend management UI
+overlay.d/  Site files baked into every image (gitignored except its README)
+docs/       Architecture, deployment, builder, updates, security
+scripts/    Helpers (e.g. QEMU end-to-end test)
 ```
 
 ## Developing & testing
@@ -29,6 +31,20 @@ full image → netboot-image → boot loop.
 ```bash
 make image        # build an image
 make imager       # build the netboot imager
+```
+
+The web UI has its own checks, both run by CI:
+
+```bash
+# Backend tests — each is a directly runnable script, no test runner needed:
+cd webui/backend
+pip install -r requirements.txt httpx
+for t in tests/test_*.py; do python "$t"; done
+
+# Frontend typecheck:
+cd webui/frontend
+npm ci
+npm run typecheck
 ```
 
 ## Pull requests

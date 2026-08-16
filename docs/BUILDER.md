@@ -33,13 +33,19 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--ssh-authorized-key K` | — | Same, passing the key inline |
 | `--ssh-key-only` | off | Disable SSH password auth (requires a key) |
 | `--encrypt` | off | LUKS2-encrypt the root slots and overlay |
-| `--unlock METHOD` | `keyfile` | Auto-unlock: `passphrase` \| `keyfile` \| `tpm2` \| `tang` |
+| `--unlock METHOD` | `keyfile` | Auto-unlock: `passphrase` \| `keyfile` \| `tpm2` \| `tang`. Note `make image` defaults to `tpm2` instead (`UNLOCK ?= tpm2` in the Makefile) |
 | `--tpm2-pcrs LIST` | `7` | PCRs a `tpm2` binding is sealed to |
 | `--luks-passphrase P` | — | LUKS passphrase (setup + recovery); required with `--encrypt` |
 | `--luks-passphrase-file F` | — | Read it from a file (or `-` for stdin) instead — keeps it out of `ps` |
 | `--tang-url URL` | — | Tang server URL (required for `--unlock tang`) |
 | `--compress` | `zstd` | `zstd` \| `gzip` \| `none` |
 | `--output PATH` | `/output/<distro>-<suite>-ab.img` | Output path (inside the container) |
+
+The flags governing writable state and customization — `--state-model`,
+`--slot-private-upper`, `--persist`, `--slot-private`, `--volatile`,
+`--reset-on-update`, `--keep-path`, `--overlay-min`, `--own-path`,
+`--overlay-dir`, `--run-script` — are covered in
+[Writable state](#writable-state) and [Customization](#customization) below.
 
 By default the image is built as small as the layout allows (two root slots +
 boot + a minimal overlay, ≈7 GiB raw with the defaults) and the overlay
@@ -54,9 +60,11 @@ to any larger disk, and smaller images write faster during mass imaging.
 - RAUC preconfigured (`/etc/rauc/system.conf`, `compatible=<distro>-ab`,
   i.e. `debian-ab` or `ubuntu-ab` — update bundles must match).
 - `first-boot-expand.service` to grow the overlay on first boot.
-- `ab-mark-good.service` — resets the booted slot's GRUB try counter once the
-  system reaches multi-user, so the A/B fallback logic stays armed (see
-  [UPDATES.md](UPDATES.md)).
+- `ab-mark-good.service` — marks the booted slot good before logins are
+  permitted, so a slot an update has just written proves itself before anyone
+  can bless it by logging in. The fallback is armed only when an update writes
+  a slot; proven slots boot outright (see
+  [UPDATES.md](UPDATES.md#how-slot-selection-works)).
 - `machine-identity.service` — the image ships with a **blank `machine-id` and
   no SSH host keys** (so imaged machines aren't identity clones of each other).
   On first boot each machine generates its own and stores them in the persistent

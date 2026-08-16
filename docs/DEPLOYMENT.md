@@ -71,6 +71,10 @@ Everything a machine needs is served by this stack — the iPXE bootloaders are
 baked into the dnsmasq image, and the imager and disk image come from `output/`
 over HTTP. Targets never need internet access.
 
+Provisioning is **IPv4-only** today: the dnsmasq configuration has no DHCPv6 or
+router advertisements, and there is no UEFI HTTP boot. Machines PXE-boot over
+IPv4 regardless of what the rest of the network runs.
+
 ## Imaging many machines at once
 
 The intended topology is a second NIC on the server going to a dumb switch, with
@@ -172,7 +176,7 @@ change what a machine is.
    binary and the installed image's GRUB are unsigned). The imaged system boots
    on both BIOS and UEFI firmware, so mixed fleets are fine.
 4. Power them on. Each PXE-boots, runs the imager, writes the disk, and reboots
-   into Debian A/B. Watch `docker compose logs -f`.
+   into the installed A/B system. Watch `docker compose logs -f`.
 
 ### Imager command-line options
 
@@ -187,6 +191,8 @@ and in the per-machine scripts the web UI generates under `output/hosts/`:
 | `imager.compress=` | `auto` | `auto` \| `zstd` \| `gzip` \| `none` |
 | `imager.action=` | `reboot` | `reboot` \| `poweroff` \| `shell` |
 | `imager.wipe=` | `0` | `1` wipes the partition table first |
+| `imager.hostname=` | (image's own) | Hostname the machine adopts on first boot — set via the assignment's **Hostname** field, see [Naming machines](#naming-machines) |
+| `imager.report=` | derived from `imager.url` | Override the URL progress reports are posted to (default: `<image host>/api/imaging/report`) |
 
 ## Testing without hardware (QEMU)
 
@@ -217,3 +223,26 @@ Rebuild (`make image`), drop the new file in `./output`, update `IMAGE_FILE` in
 `.env`, and `docker compose up -d` to re-render `default.ipxe`. (Setting it from
 the web UI does this for you, and also regenerates any per-machine scripts.) No rebuild of the
 containers is required for a new image — only when `IMAGE_FILE` changes.
+
+## Backing up the server
+
+Most of `output/` is rebuildable. What is not fits in a few kilobytes:
+
+- **`output/rauc-keys/`** — the update signing key. This is the one that
+  matters: RAUC installs a bundle only if it is signed by the certificate
+  already inside the image, so losing `key.pem` means **no further updates for
+  any machine already deployed**, permanently — the update is the thing they
+  will not accept. See
+  [UPDATES.md](UPDATES.md#the-signing-key-and-why-order-matters).
+- **`output/hosts/assignments.json`** — the per-machine image, hostname and
+  action assignments.
+- **`output/deployments.jsonl`** — the fleet record: every machine this server
+  has imaged and what it reported back.
+- **`output/.secrets-store.json`** — the secrets-manager configuration,
+  including its token. Mode 0600; keep the backup as private as the file.
+- **`server/.env` and `webui/.env`** — the server and UI configuration
+  (passwords and secrets included).
+
+The images themselves (`output/*.img*`) do not need backing up — they are
+rebuilt from the repository. Restoring is putting the files back in place
+before `make server-up` and starting the web UI; nothing else holds state.

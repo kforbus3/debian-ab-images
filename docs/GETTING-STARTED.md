@@ -31,7 +31,7 @@ and machine-id on first boot.
 | What | Why |
 |------|-----|
 | A Linux host (or Docker Desktop) with **Docker + Compose** | Everything runs in containers; the builder needs `--privileged` for loop devices |
-| ~10 GiB free disk in the repo's `output/` | Raw image + compressed image + netboot files |
+| ~16 GiB free disk in the repo's `output/` | Raw image + compressed image + netboot files (the builder warns below this for the default build) |
 | For imaging: a host attached to the **imaging LAN/switch** | The provisioning server uses host networking for DHCP/TFTP |
 | Target machines that can **PXE boot** (BIOS or UEFI) | UEFI targets must have **Secure Boot disabled** |
 
@@ -105,18 +105,21 @@ $EDITOR .env
 docker compose up -d --build      # or: make server-up (from the repo root)
 ```
 
-The three settings that matter:
+The four settings that matter:
 
 - **`SERVER_IP`** — this host's IP on the imaging LAN.
+- **`INTERFACE`** — the NIC facing the machines being imaged. Required: DHCP
+  and TFTP bind to it alone, and the server refuses to start without it rather
+  than answering DHCP on every network the host is attached to.
 - **`IMAGE_FILE`** — which file in `output/` to deploy (e.g.
   `debian-trixie-ab.img.zst`).
 - **`MODE`** — how DHCP works:
-  - `proxy` (default): your existing router keeps handing out IPs; this server
-    only answers PXE questions. Safe on a shared LAN. Set `PROXY_SUBNET`
-    (e.g. `192.168.1.0`).
-  - `dhcp`: standalone DHCP for an isolated provisioning switch. Set
+  - `dhcp` (default): standalone DHCP for an isolated provisioning switch. Set
     `DHCP_RANGE_START`/`DHCP_RANGE_END`. Never use on a LAN that already
     has DHCP.
+  - `proxy`: your existing router keeps handing out IPs; this server
+    only answers PXE questions. Safe on a shared LAN. Set `PROXY_SUBNET`
+    (e.g. `192.168.1.0`).
 
 > ⚠️ Anything that PXE-boots on this network **will be re-imaged** (its disk
 > overwritten). Use a dedicated switch/VLAN, or `MODE=proxy` on a network where
@@ -154,7 +157,9 @@ On its first boot, each freshly imaged machine automatically:
 3. If encrypted with `tpm2`/`tang`: **enrolls** the LUKS volumes to the TPM or
    Tang server and stages a keyless initramfs. The bootstrap keyfile is destroyed
    one boot later, once that boot has proved the machine can unlock without it.
-4. Marks the booted slot "good", arming the A/B fallback logic.
+4. Marks the booted slot "good". The A/B fallback itself is armed only when an
+   update writes a slot — a freshly imaged machine boots proven slots outright.
+   See [UPDATES.md](UPDATES.md#how-slot-selection-works).
 
 Then log in as the user you baked in (`USERNAME`/`PASSWORD` or your SSH key).
 Root is locked; use `sudo`.
@@ -169,7 +174,8 @@ cp webui/.env.example webui/.env   # set ADMIN_PASSWORD and SECRET_KEY
 make webui
 ```
 
-Open <http://localhost:8080>, log in as `admin`, and use the **Build** page
+Open <http://localhost:8080>, log in with your `ADMIN_PASSWORD` (there is no
+username), and use the **Build** page
 (live log), **Images** library, and **Provisioning** pages. Details in
 [WEBUI.md](WEBUI.md).
 

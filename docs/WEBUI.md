@@ -168,9 +168,50 @@ browser ─▶ webui (FastAPI + React)
   browser over Server-Sent Events.
 - Authentication is a single admin password (JWT). Run the UI only on a trusted
   network — it has full control of the Docker host.
+- FastAPI's interactive API documentation is live at `/docs` (Swagger UI), with
+  `/redoc` and the raw schema at `/openapi.json`. The schema is readable without
+  logging in; every endpoint it describes requires auth.
+
+## Developing the UI
+
+The backend runs directly with uvicorn — no Docker needed for API work. It
+wants the same environment the container gets, plus a `PROJECT_DIR` pointing at
+a scratch directory (it defaults to `/project`, the container mount, which does
+not exist on your machine):
+
+```bash
+cd webui/backend
+pip install -r requirements.txt
+PROJECT_DIR=$(mktemp -d) ADMIN_PASSWORD=dev SECRET_KEY=dev-secret \
+  uvicorn app.main:app --reload --port 8080
+```
+
+For the frontend, `npm run dev` in `webui/frontend` starts Vite with a proxy
+that forwards `/api` to the backend, so both halves reload live:
+
+```bash
+cd webui/frontend
+npm ci
+npm run dev
+```
 
 ## Security note
 
 The UI container mounts the Docker socket, which is equivalent to root on the
 host. Restrict access to the UI (strong `ADMIN_PASSWORD`, trusted network only,
 ideally behind a TLS reverse proxy).
+
+The smallest working TLS front is [Caddy](https://caddyserver.com/), which
+obtains and renews the certificate itself. A complete `Caddyfile`:
+
+```
+webui.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+If the host has several networks, also bind the compose port to the management
+interface rather than every address — in `webui/docker-compose.yml`, publish
+`<management IP>:8080:8080` instead of `8080:8080` — so the UI (and the login
+form in front of the Docker socket) is not reachable from the imaging segment
+or anywhere else it has no business being.

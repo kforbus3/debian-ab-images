@@ -2,8 +2,8 @@
 # Render dnsmasq config from environment, then run it.
 #
 # Modes:
-#   MODE=proxy  -> proxyDHCP: coexists with an existing DHCP server (default)
-#   MODE=dhcp   -> standalone DHCP: this server also hands out IP leases
+#   MODE=dhcp   -> standalone DHCP: this server also hands out IP leases (default)
+#   MODE=proxy  -> proxyDHCP: coexists with an existing DHCP server
 set -eu
 
 MODE="${MODE:-dhcp}"
