@@ -15,13 +15,13 @@ from app import orchestrator as orch
 from app import secretstore
 from app.deployments import deployments
 from app.jobs import jobs
-from app.security import require_auth
+from app.security import Principal, require_operator, require_viewer
 
 router = APIRouter(tags=["updates"])
 
 
 @router.get("/bundles")
-async def list_bundles(_: str = Depends(require_auth)):
+async def list_bundles(_: Principal = Depends(require_viewer)):
     bundles = await run_in_threadpool(orch.list_bundles)
     # What the fleet is actually running, so an operator can tell at a glance
     # whether a bundle has been rolled out or merely built.
@@ -33,7 +33,7 @@ async def list_bundles(_: str = Depends(require_auth)):
 
 
 @router.post("/bundles/build")
-async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
+async def build_bundle(body: dict = Body(...), _: Principal = Depends(require_operator)):
     image = str(body.get("image") or "").strip()
     if not image:
         raise HTTPException(400, "image is required")
@@ -80,7 +80,7 @@ async def build_bundle(body: dict = Body(...), _: str = Depends(require_auth)):
 
 
 @router.delete("/bundles/{name}")
-async def delete_bundle(name: str, _: str = Depends(require_auth)):
+async def delete_bundle(name: str, _: Principal = Depends(require_operator)):
     """Remove a bundle and its sidecars.
 
     A bundle a machine has already installed is not needed by that machine --

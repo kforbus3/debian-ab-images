@@ -149,6 +149,26 @@ jobs:
           print(f"OK: {len(paths)} API routes, all routers mounted")
           PY
 
+      - name: Named users, roles, sessions and API tokens
+        working-directory: webui/backend
+        run: |
+          # The compatibility contract (admin + ADMIN_PASSWORD keeps working,
+          # hashed, and is never resynced from the env once users.json exists),
+          # the full role matrix over the real app, immediate session/token
+          # revocation, and the last-admin guard. Every failure here has a
+          # quiet production shape -- a viewer who can start builds looks
+          # exactly like a working UI.
+          python tests/test_identity.py
+
+      - name: Every change leaves an audit line
+        working-directory: webui/backend
+        run: |
+          # Mutations are audited by middleware (so a new router is covered
+          # the day it exists), failed logins keep the username and never the
+          # password, the LUKS reveal GET is recorded, and the log trims
+          # itself rather than filling the disk the builds need.
+          python tests/test_audit.py
+
       - name: Secrets-manager integration
         working-directory: webui/backend
         run: |

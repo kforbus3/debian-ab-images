@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 
 from ..deployments import deployments
 from ..imaging import registry
-from ..security import require_auth
+from ..security import Principal, require_operator, require_viewer
 
 router = APIRouter()
 
@@ -75,7 +75,7 @@ async def checkin(request: Request):
 
 
 @router.get("/deployments")
-async def list_deployments(_: str = Depends(require_auth)):
+async def list_deployments(_: Principal = Depends(require_viewer)):
     """Every machine this server has imaged, and whether it came back."""
     rows = deployments.fleet()
     return {
@@ -86,7 +86,7 @@ async def list_deployments(_: str = Depends(require_auth)):
 
 
 @router.get("/imaging")
-async def list_imaging(_: str = Depends(require_auth)):
+async def list_imaging(_: Principal = Depends(require_viewer)):
     """Machines imaging right now, plus those that just finished."""
     rows = registry.active()
     return {
@@ -96,6 +96,6 @@ async def list_imaging(_: str = Depends(require_auth)):
 
 
 @router.delete("/imaging/{ident}")
-async def forget(ident: str, _: str = Depends(require_auth)):
+async def forget(ident: str, _: Principal = Depends(require_operator)):
     """Drop a row by hand, for a machine that will never report again."""
     return {"ok": registry.forget(ident)}

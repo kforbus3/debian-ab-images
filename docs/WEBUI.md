@@ -134,17 +134,82 @@ own config file. Everything saved through the UI goes to
 The same thing is available on the command line via `scripts/luks-secret.sh` —
 see [BUILDER.md](BUILDER.md#storing-the-passphrase-in-a-secrets-manager).
 
+## Users, roles, and tokens
+
+The UI has named users with three roles, revocable sessions, API tokens for
+automation, and an audit log. All of it lives in files under `output/` — no
+database.
+
+**Bootstrap.** On the first start with no `output/users.json`, the
+`ADMIN_PASSWORD` environment variable becomes the password of a user named
+`admin` (role admin), stored as a bcrypt hash. Logging in as
+`admin`/`ADMIN_PASSWORD` works exactly as it always has. Once `users.json`
+exists, **`ADMIN_PASSWORD` is ignored** — deliberately not resynced on later
+boots, so a password changed in the UI is never silently reverted by an
+environment variable. To start over, stop the UI and delete
+`output/users.json`; the next start bootstraps again. Compose still requires
+`ADMIN_PASSWORD` to be set, so a fresh deployment can never come up with a
+default credential.
+
+**Roles.** Ordered `viewer` < `operator` < `admin`, enforced per endpoint:
+
+- **viewer** — sees everything (dashboard, images, jobs and their logs, fleet,
+  bundles), changes nothing. In the UI, mutating controls are disabled with a
+  tooltip; the API answers 403 regardless.
+- **operator** — everything a viewer can, plus the work: build images and
+  bundles, delete them, manage image files, start/stop the provisioning
+  server, edit per-machine assignments, cancel jobs.
+- **admin** — everything, plus what changes who can do what: users, API
+  tokens, sessions, the audit log, the secrets manager, and the provisioning
+  server's configuration file.
+
+The last enabled admin cannot be deleted, demoted or disabled — the refusal
+says so — because a system with no admin can never manage users again.
+
+**Sessions** are opaque `fls_…` tokens; the server stores only their SHA-256
+in `output/.sessions.json`, so the state file cannot be replayed as a
+session. They slide 12 hours on each use, end 7 days after login regardless,
+survive a backend restart, and are revocable: **Log out** revokes the one you
+hold, and admins can list and revoke anyone's under **Sessions**. Disabling a
+user or resetting a password revokes that user's sessions immediately.
+
+**API tokens** are for automation — CI, scripts, cron. Create one under
+**API Tokens** (admin): pick a name, a role no higher than needed, and
+optionally an expiry. The raw token (`flt_…`) is shown **once**, at creation;
+only its hash is stored (`output/.api-tokens.json`). It goes in the same
+header the browser uses:
+
+```bash
+curl -H "Authorization: Bearer flt_…" http://localhost:8080/api/images
+curl -H "Authorization: Bearer flt_…" -X POST \
+     -H "Content-Type: application/json" -d '{"image": "debian-trixie-amd64-ab.img"}' \
+     http://localhost:8080/api/bundles/build
+```
+
+Tokens act under their own name (`token:<name>` in the audit log), with their
+own role, and are revocable individually — so a leaked pipeline credential is
+one revocation, not a password rotation for everybody.
+
+**Audit log.** Every mutating API call, every login (success and failure —
+the attempted username is kept, the password never), every user/token/session
+change, and every reveal of a stored LUKS passphrase is appended to
+`output/audit.jsonl` with timestamp, actor, role, method, path, outcome and
+source IP. Admins can browse and filter it under **Audit Log**, or `grep` the
+file directly; it trims itself oldest-first past ~20,000 events.
+
 ## Running it
 
 ```bash
 cp webui/.env.example webui/.env
 # Edit it:
-#   ADMIN_PASSWORD — UI login password
+#   ADMIN_PASSWORD — password the `admin` user is created with on first start
 #   SECRET_KEY     — random string
 make webui
 ```
 
-Open **http://localhost:8080** and log in with `ADMIN_PASSWORD`.
+Open **http://localhost:8080** and log in as **`admin`** with `ADMIN_PASSWORD`.
+After the first start the users file is authoritative — see
+[Users, roles, and tokens](#users-roles-and-tokens).
 
 No path configuration is needed. Compose mounts the repository root at `/project`
 in the UI container, and the UI asks the Docker daemon where that mount came from
@@ -168,8 +233,10 @@ browser ─▶ webui (FastAPI + React)
 - The backend launches `docker build` + `docker run` for the builder/imager and
   `docker compose` for the provisioning server, streaming combined output to the
   browser over Server-Sent Events.
-- Authentication is a single admin password (JWT). Run the UI only on a trusted
-  network — it has full control of the Docker host.
+- Authentication is named users with roles (viewer/operator/admin), revocable
+  sessions and API tokens — see [Users, roles, and tokens](#users-roles-and-tokens).
+  Still: run the UI only on a trusted network — it has full control of the
+  Docker host.
 - FastAPI's interactive API documentation is live at `/docs` (Swagger UI), with
   `/redoc` and the raw schema at `/openapi.json`. The schema is readable without
   logging in; every endpoint it describes requires auth.
@@ -200,8 +267,8 @@ npm run dev
 ## Security note
 
 The UI container mounts the Docker socket, which is equivalent to root on the
-host. Restrict access to the UI (strong `ADMIN_PASSWORD`, trusted network only,
-ideally behind a TLS reverse proxy).
+host. Restrict access to the UI (strong passwords, least-role accounts, trusted
+network only, ideally behind a TLS reverse proxy).
 
 The smallest working TLS front is [Caddy](https://caddyserver.com/), which
 obtains and renews the certificate itself. A complete `Caddyfile`:

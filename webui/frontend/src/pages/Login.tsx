@@ -8,6 +8,7 @@ import { Button, Card, Input, Label } from "../components/ui";
 export default function Login() {
   const { login, authed } = useAuth();
   const navigate = useNavigate();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -15,7 +16,7 @@ export default function Login() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setBusy(true);
-    try { await login(password); navigate("/", { replace: true }); }
+    try { await login(username, password); navigate("/", { replace: true }); }
     catch (err) { setError(apiError(err)); } finally { setBusy(false); }
   }
   return (
@@ -27,7 +28,8 @@ export default function Login() {
           <p className="text-xs text-zinc-500">Sign in to manage images & provisioning</p>
         </div>
         <form onSubmit={submit} className="space-y-4">
-          <div><Label>Password</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required /></div>
+          <div><Label>Username</Label><Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" autoComplete="username" autoFocus required /></div>
+          <div><Label>Password</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></div>
           {error && <p className="text-sm text-red-400">{error}</p>}
           <Button type="submit" loading={busy} className="w-full">Sign in</Button>
         </form>

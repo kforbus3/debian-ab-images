@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { HardDrive, Download, Trash2, RefreshCw, Rocket, Lock, KeyRound } from "lucide-react";
 import { api, apiError, fmtBytes } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "../components/Toast";
 import { Button, Card, PageHeader, Spinner, Badge } from "../components/ui";
 import { secretName } from "./Secrets";
@@ -10,6 +11,9 @@ interface Img { name: string; size: number; created: string; sha256?: string; me
 
 export default function Images() {
   const toast = useToast();
+  // Deploy writes the provisioning server config, which is an admin call;
+  // delete is an operator one. Download and the listing are for everyone.
+  const { canOperate, isAdmin } = useAuth();
   const [images, setImages] = useState<Img[]>([]);
   const [imagerReady, setImagerReady] = useState(false);
   const [deployed, setDeployed] = useState("");
@@ -106,9 +110,9 @@ export default function Images() {
                   <td className="px-4 py-3 font-mono text-xs text-zinc-500" title={m.sha256}>{m.sha256 ? m.sha256.slice(0, 12) + "…" : "—"}</td>
                   <td className="px-4 py-3 text-zinc-400">{new Date(m.meta?.created || m.created).toLocaleString()}</td>
                   <td className="px-4 py-3"><div className="flex justify-end gap-1">
-                    {m.name !== deployed && <Button size="sm" onClick={() => deploy(m.name)}><Rocket size={13} /> Deploy</Button>}
+                    {m.name !== deployed && <Button size="sm" disabled={!isAdmin} title={isAdmin ? undefined : "Deploying changes the server configuration — admin only"} onClick={() => deploy(m.name)}><Rocket size={13} /> Deploy</Button>}
                     <Button size="sm" variant="secondary" onClick={() => download(m.name)}><Download size={13} /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => remove(m.name)}><Trash2 size={14} className="text-red-400" /></Button>
+                    <Button size="sm" variant="ghost" disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"} onClick={() => remove(m.name)}><Trash2 size={14} className="text-red-400" /></Button>
                   </div></td>
                 </tr>
               ))}

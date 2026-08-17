@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, apiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Card, PageHeader, Badge, Button, Spinner } from "../components/ui";
 import { HardDrive, CheckCircle2, XCircle, AlertTriangle, Loader2 } from "lucide-react";
 
@@ -44,6 +45,7 @@ function elapsed(sec: number) {
 }
 
 function MachineRow({ m, onForget }: { m: Machine; onForget: (id: string) => void }) {
+  const { canOperate } = useAuth();
   const st = STATE_STYLE[m.state];
 
   return (
@@ -77,7 +79,7 @@ function MachineRow({ m, onForget }: { m: Machine; onForget: (id: string) => voi
           </div>
         </div>
 
-        {(m.state === "failed" || m.state === "stalled") && (
+        {(m.state === "failed" || m.state === "stalled") && canOperate && (
           <Button variant="ghost" size="sm" onClick={() => onForget(m.id)}>Dismiss</Button>
         )}
       </div>
