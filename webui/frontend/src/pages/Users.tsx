@@ -104,10 +104,14 @@ export default function Users() {
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-500">{fmtWhen(u.last_login)}</td>
                     <td className="px-4 py-3"><div className="flex justify-end gap-1">
-                      <Button size="sm" variant="secondary" title="Set a new password"
-                              onClick={() => { setResetting(u.username); setNewPassword(""); }}>
-                        <KeyRound size={13} />
-                      </Button>
+                      {u.source !== "oidc" && (
+                        // An SSO user has no password here to reset — their
+                        // credential lives at the IdP. Disable/delete still apply.
+                        <Button size="sm" variant="secondary" title="Set a new password"
+                                onClick={() => { setResetting(u.username); setNewPassword(""); }}>
+                          <KeyRound size={13} />
+                        </Button>
+                      )}
                       <Button size="sm" variant="secondary" title={u.disabled ? "Enable" : "Disable — ends their sessions now"}
                               onClick={() => toggleDisabled(u)}>
                         {u.disabled ? <CircleCheck size={13} className="text-emerald-400" /> : <Ban size={13} className="text-amber-400" />}

@@ -44,6 +44,15 @@ requests) and restrict it to one interface with `INTERFACE=`.
   ignored. Passwords are stored as bcrypt hashes — the file leaking costs an
   attacker a cracking run, not a login — but treat `output/` as sensitive
   anyway: it also holds the secrets-manager configuration.
+- The web UI can optionally authenticate against an OIDC provider
+  (authorization-code flow with PKCE; ID tokens verified against the IdP's
+  JWKS for signature, issuer, audience, expiry and nonce). Sessions and roles
+  are unchanged underneath: an SSO login mints the same revocable session,
+  and the user record simply carries `source: "oidc"` and no password hash.
+  Admission is deny-by-default (unmapped groups are refused and audited), an
+  IdP username colliding with a local user is refused rather than merged,
+  and a locally-disabled user stays refused even with a valid IdP assertion.
+  A down IdP affects only the SSO endpoints — never password login.
 - Web UI sessions are opaque, server-side and revocable (12 h sliding expiry,
   7-day cap); API tokens for automation are named, role-limited and
   individually revocable. Both are stored **as SHA-256 hashes** in

@@ -16,6 +16,9 @@ interface AuthCtx {
   canOperate: boolean;
   isAdmin: boolean;
   login: (username: string, password: string) => Promise<void>;
+  // SSO callback handoff: trade the one-time code from the URL fragment for
+  // the session token, stored exactly like a password login's.
+  ssoExchange: (code: string) => Promise<void>;
   logout: () => void;
 }
 const Ctx = createContext<AuthCtx>(null as any);
@@ -40,6 +43,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokens.set(data.access_token);
     setUsername(data.username); setRole(data.role); setAuthed(true);
   }
+  async function ssoExchange(code: string) {
+    const { data } = await api.post("/auth/oidc/exchange", { code });
+    tokens.set(data.access_token);
+    setUsername(data.username); setRole(data.role); setAuthed(true);
+  }
   function logout() {
     // Revoke server-side first: clearing localStorage alone would leave the
     // session valid for anyone who has seen the token.
@@ -50,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={{
     authed, loading, username, role,
     canOperate: roleAtLeast(role, "operator"), isAdmin: role === "admin",
-    login, logout,
+    login, ssoExchange, logout,
   }}>{children}</Ctx.Provider>;
 }
 export const useAuth = () => useContext(Ctx);

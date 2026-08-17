@@ -25,6 +25,25 @@ class Settings(BaseSettings):
     # docker CLI, which runs in here, not by the daemon.
     project_dir: str = "/project"
 
+    # --- OIDC single sign-on (see app/oidc.py) ---------------------------------
+    # Entirely off unless BOTH oidc_issuer and oidc_client_id are set; password
+    # login is never affected either way. The secret is optional on purpose: a
+    # public client with PKCE is a valid OIDC configuration.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    # Which ID-token claim carries the user's groups, and how those groups map
+    # to local roles ("idp-group=role", comma-separated). A user in several
+    # mapped groups gets the highest of their roles.
+    oidc_role_claim: str = "groups"
+    oidc_role_map: str = ""
+    # What happens to an authenticated user whose groups map to nothing:
+    # "deny" refuses them (and audits the refusal); viewer/operator/admin
+    # admits everyone the IdP vouches for, at that role.
+    oidc_default_role: str = "deny"
+    oidc_display_name: str = "Single sign-on"
+    oidc_scopes: str = "openid profile email"
+
     @property
     def output_dir(self) -> str:
         return f"{self.project_dir}/output"

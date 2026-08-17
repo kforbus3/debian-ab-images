@@ -24,6 +24,16 @@ services:
       # disk, and takes precedence over a token saved through the UI.
       - BAO_TOKEN=${BAO_TOKEN:-}
       - VAULT_TOKEN=${VAULT_TOKEN:-}
+      # Optional: OIDC single sign-on — off unless issuer + client id are set.
+      # See webui/.env.example and docs/WEBUI.md "Single sign-on (OIDC)".
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_ROLE_CLAIM=${OIDC_ROLE_CLAIM:-groups}
+      - OIDC_ROLE_MAP=${OIDC_ROLE_MAP:-}
+      - OIDC_DEFAULT_ROLE=${OIDC_DEFAULT_ROLE:-deny}
+      - OIDC_DISPLAY_NAME=${OIDC_DISPLAY_NAME:-Single sign-on}
+      - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_PROJECT_DIR:-..}:/project

@@ -4,10 +4,20 @@ from collections import deque
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app import audit, sessions, users
+from app import audit, oidc, sessions, users
+from app.config import settings
 from app.security import Principal, client_ip, oauth2_scheme, require_admin, require_viewer
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/methods")
+async def methods():
+    """What the login page should render. Open on purpose: it names ways to
+    log in, which the login form itself already reveals."""
+    return {"password": True,
+            "oidc": {"enabled": oidc.enabled(),
+                     "display_name": settings.oidc_display_name}}
 
 # Sliding-window throttle on failed logins, keyed by username+IP so one
 # guessed-at account does not lock the console for everyone else, and one
