@@ -2,6 +2,21 @@
 
 Notable changes per release. Dates are the tag date.
 
+## v0.9.1 — 2026-08-17
+
+**A desktop build gets the `/boot` it actually needs.** The first real desktop
+build died at the per-slot kernel copy with a bare "No space left on device" —
+one line after GRUB reported no error. `/boot` holds three copies of the
+kernel and initramfs (the versioned originals plus the `/A` and `/B` copies
+that make rollback carry its own kernel), and a desktop initramfs is several
+times a minimal one: `MODULES=most` pulls the DRM drivers in, and with them
+the graphics firmware the profile installs. The desktop profile now floors
+`/boot` at 2048 MiB the same way it floors the root slot at 10 GiB,
+`--boot-size` is a real documented flag rather than an undocumented
+environment variable, and the per-slot copy is preceded by a space check that
+names the initramfs size and the `--boot-size` that would fit. Minimal and
+server builds are unchanged.
+
 ## v0.9.0 — 2026-08-17
 
 **The web UI has real identity.** One shared admin password with
