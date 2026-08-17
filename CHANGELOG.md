@@ -2,6 +2,50 @@
 
 Notable changes per release. Dates are the tag date.
 
+## v0.9.0 — 2026-08-17
+
+**The web UI has real identity.** One shared admin password with
+root-equivalent reach was the single genuine blocker between this project and
+an enterprise access review. Now:
+
+- **Named users with roles** — `admin` > `operator` > `viewer`, declared per
+  endpoint in every router. Viewers read, operators run the day job (builds,
+  imaging, updates), admins hold users, tokens, secrets and server config.
+  The UI disables what your role cannot do; the API answers 403 with the
+  required rank named. Passwords are bcrypt hashes in `output/users.json`
+  (0600); the last enabled admin cannot be deleted, demoted or disabled.
+- **Sessions that can be taken back** — opaque `fls_` tokens stored as
+  SHA-256 server-side (a stolen state file yields no working session),
+  12-hour sliding expiry capped at 7 days, surviving restarts, individually
+  revocable, and checked against the live user record so disabling a user
+  ends their access now — not at token expiry. A JWT cannot be taken back;
+  that is why these are not JWTs.
+- **API tokens** — `flt_` bearer tokens for automation: role-ceilinged,
+  shown once, stored hashed, revocable.
+- **An audit log** — `output/audit.jsonl`, bounded and append-only: every
+  mutating API call with actor, role, status and source IP; failed logins
+  with the attempted username; the LUKS passphrase reveal recorded
+  explicitly. Machine report endpoints are excluded so a fleet imaging
+  itself cannot drown the record. Admin viewer page included.
+- **OIDC single sign-on** — set `OIDC_ISSUER` and `OIDC_CLIENT_ID` and the
+  login page grows an SSO button: authorization-code + PKCE against any
+  conforming IdP, roles mapped from the group claim (highest wins, refreshed
+  every login), unmapped users refused by default with an audit line. A
+  username collision with a local user is a refusal, never a merge — that
+  would be an account takeover with extra steps. A down IdP costs exactly
+  the SSO button; password login never depends on it.
+
+**The upgrade is invisible to existing deployments.** On first boot with no
+users file, `ADMIN_PASSWORD` becomes a real, hashed `admin` user — and is
+never consulted again, so a password changed in the UI is not reverted by an
+environment variable on the next restart. A corrupt users file reads as
+empty, never as missing: the bootstrap must not resurrect old credentials
+over repaired ones.
+
+160 new checks across three test files, including a full OIDC flow against
+an in-process fake IdP whose token endpoint really verifies the PKCE
+challenge.
+
 ## v0.8.0 — 2026-08-17
 
 **Images now come in profiles: Minimal, Server, and Desktop.** Fleets are not
