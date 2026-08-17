@@ -11,8 +11,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
     secret_key: str = secrets.token_urlsafe(48)
+    # Seeds the `admin` user on the very first start (see app/users.py); once
+    # output/users.json exists it is ignored, never resynced.
     admin_password: str = "admin"
-    token_expire_hours: int = 12
 
     # Absolute path to the project ON THE HOST (so sibling containers get correct
     # bind-mount paths through the Docker socket). Leave it empty: it is detected

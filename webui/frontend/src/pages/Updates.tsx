@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, apiError, fmtBytes } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Spinner, LogView } from "../components/ui";
 import { Package, Copy, RefreshCw, KeyRound, Trash2 } from "lucide-react";
@@ -12,6 +13,7 @@ type Bundle = {
 
 export default function Updates() {
   const toast = useToast();
+  const { canOperate } = useAuth();
   const [bundles, setBundles] = useState<Bundle[] | null>(null);
   const [running, setRunning] = useState<Record<string, number>>({});
   const [images, setImages] = useState<string[]>([]);
@@ -156,7 +158,8 @@ export default function Updates() {
           )}
 
           <Button className="mt-4" loading={busy}
-                  disabled={!image || (encrypted[image] && !stored && !luks)} onClick={build}>
+                  disabled={!canOperate || !image || (encrypted[image] && !stored && !luks)}
+                  title={canOperate ? undefined : "Your viewer role is read-only"} onClick={build}>
             <Package size={14} /> Build bundle
           </Button>
 
@@ -246,8 +249,8 @@ export default function Updates() {
                     <td className="px-3 py-2.5 text-xs text-zinc-500">{b.created.replace("T", " ").replace("+00:00", "")}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex justify-end">
-                        <Button size="sm" variant="ghost" onClick={() => removeBundle(b)}
-                                title="Delete this bundle">
+                        <Button size="sm" variant="ghost" disabled={!canOperate} onClick={() => removeBundle(b)}
+                                title={canOperate ? "Delete this bundle" : "Your viewer role is read-only"}>
                           <Trash2 size={14} className="text-red-400" />
                         </Button>
                       </div>

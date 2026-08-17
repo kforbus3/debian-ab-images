@@ -20,7 +20,7 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from app import orchestrator as orch
-from app.security import require_auth
+from app.security import Principal, require_operator, require_viewer
 
 router = APIRouter(tags=["overlay"])
 
@@ -65,7 +65,7 @@ def _mode_from(body: dict, default: int = 0o644) -> int:
 
 
 @router.get("/overlay")
-async def overlay(_: str = Depends(require_auth)):
+async def overlay(_: Principal = Depends(require_viewer)):
     """Files that will be copied into the next image, and what that means."""
     files = await run_in_threadpool(orch.overlay_files)
     return {
@@ -80,7 +80,7 @@ async def overlay(_: str = Depends(require_auth)):
 
 
 @router.get("/overlay/file")
-async def read_file(path: str, _: str = Depends(require_auth)):
+async def read_file(path: str, _: Principal = Depends(require_viewer)):
     try:
         return await run_in_threadpool(orch.overlay_read, path, MAX_EDIT_BYTES)
     except (orch.OverlayPathError, FileNotFoundError, OSError) as exc:
@@ -88,7 +88,7 @@ async def read_file(path: str, _: str = Depends(require_auth)):
 
 
 @router.get("/overlay/download")
-async def download_file(path: str, _: str = Depends(require_auth)):
+async def download_file(path: str, _: Principal = Depends(require_viewer)):
     """The raw bytes, for files the browser cannot edit."""
     try:
         full, image_path = await run_in_threadpool(orch.overlay_resolve, path)
@@ -103,7 +103,7 @@ async def download_file(path: str, _: str = Depends(require_auth)):
 
 
 @router.put("/overlay/file")
-async def write_file(body: dict = Body(...), _: str = Depends(require_auth)):
+async def write_file(body: dict = Body(...), _: Principal = Depends(require_operator)):
     """Create or replace a text file. Omit `content` to change only the mode."""
     path = str(body.get("path") or "")
     mode = _mode_from(body)
@@ -119,7 +119,7 @@ async def write_file(body: dict = Body(...), _: str = Depends(require_auth)):
 @router.post("/overlay/upload")
 async def upload_file(path: str = Form(...), file: UploadFile = File(...),
                       mode: str = Form(""), executable: bool = Form(False),
-                      _: str = Depends(require_auth)):
+                      _: Principal = Depends(require_operator)):
     """Upload a file to an image path. Binary is fine; it is copied verbatim."""
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -136,7 +136,7 @@ async def upload_file(path: str = Form(...), file: UploadFile = File(...),
 
 
 @router.post("/overlay/move")
-async def move_file(body: dict = Body(...), _: str = Depends(require_auth)):
+async def move_file(body: dict = Body(...), _: Principal = Depends(require_operator)):
     try:
         return await run_in_threadpool(
             orch.overlay_move, str(body.get("from") or ""), str(body.get("to") or ""))
@@ -145,7 +145,7 @@ async def move_file(body: dict = Body(...), _: str = Depends(require_auth)):
 
 
 @router.delete("/overlay/file")
-async def delete_file(path: str, _: str = Depends(require_auth)):
+async def delete_file(path: str, _: Principal = Depends(require_operator)):
     try:
         return await run_in_threadpool(orch.overlay_delete, path)
     except (orch.OverlayPathError, FileNotFoundError, OSError) as exc:

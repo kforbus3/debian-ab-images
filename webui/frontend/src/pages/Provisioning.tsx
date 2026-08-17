@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Play, Square, RefreshCw, Save, Monitor, Plus, Trash2 } from "lucide-react";
 import { api, apiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, Badge, Alert } from "../components/ui";
 
@@ -11,6 +12,9 @@ interface Suggestion { SERVER_IP?: string; prefixlen?: number; DHCP_NETMASK?: st
 
 export default function Provisioning() {
   const toast = useToast();
+  // Start/stop and assignments are operator calls; saving the server
+  // configuration itself is admin (it rewrites server/.env).
+  const { canOperate, isAdmin } = useAuth();
   const [cfg, setCfg] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -150,8 +154,8 @@ export default function Provisioning() {
         <>
           <Badge color={running ? "green" : "zinc"}>{running ? "running" : "stopped"}</Badge>
           {running
-            ? <Button variant="danger" size="sm" loading={busy} onClick={() => ctrl("down")}><Square size={13} /> Stop</Button>
-            : <Button size="sm" loading={busy} onClick={() => ctrl("up")}><Play size={13} /> Start</Button>}
+            ? <Button variant="danger" size="sm" loading={busy} disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"} onClick={() => ctrl("down")}><Square size={13} /> Stop</Button>
+            : <Button size="sm" loading={busy} disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"} onClick={() => ctrl("up")}><Play size={13} /> Start</Button>}
         </>
       } />
       <Alert title="Not ready to provision yet" items={problems} />
@@ -224,7 +228,7 @@ export default function Provisioning() {
               )}
             </div>
           )}
-          <Button className="mt-4" loading={busy} onClick={save}><Save size={14} /> Save configuration</Button>
+          <Button className="mt-4" loading={busy} disabled={!isAdmin} title={isAdmin ? undefined : "Server configuration is admin only"} onClick={save}><Save size={14} /> Save configuration</Button>
         </Card>
 
         <Card className="p-5">
@@ -266,8 +270,8 @@ export default function Provisioning() {
           <div className="mb-1 flex items-center justify-between">
             <h2 className="text-sm font-semibold">Per-machine images</h2>
             <div className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={() => addAssignment()}><Plus size={13} /> Add machine</Button>
-              <Button size="sm" onClick={() => saveAssignments(assign)}><Save size={13} /> Save assignments</Button>
+              <Button variant="secondary" size="sm" disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"} onClick={() => addAssignment()}><Plus size={13} /> Add machine</Button>
+              <Button size="sm" disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"} onClick={() => saveAssignments(assign)}><Save size={13} /> Save assignments</Button>
             </div>
           </div>
           <p className="mb-3 text-xs text-zinc-500">

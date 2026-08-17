@@ -38,11 +38,25 @@ requests) and restrict it to one interface with `INTERFACE=`.
   appear in `ps` or persisted job records. They remain visible to anyone with
   Docker access (`docker inspect` on a running build) — which is root-equivalent
   anyway.
-- Web UI sessions are JWTs; live log streams use short-lived (60 s) per-job
-  tokens in the query string instead of the session token. Failed logins are
-  rate-limited.
+- The web UI has named users with roles (`viewer` < `operator` < `admin`).
+  `ADMIN_PASSWORD` only seeds the initial `admin` user on the first start;
+  after that, `output/users.json` is authoritative and the variable is
+  ignored. Passwords are stored as bcrypt hashes — the file leaking costs an
+  attacker a cracking run, not a login — but treat `output/` as sensitive
+  anyway: it also holds the secrets-manager configuration.
+- Web UI sessions are opaque, server-side and revocable (12 h sliding expiry,
+  7-day cap); API tokens for automation are named, role-limited and
+  individually revocable. Both are stored **as SHA-256 hashes** in
+  `output/.sessions.json` and `output/.api-tokens.json` (mode 0600), so a
+  stolen state file yields no working credential. Live log streams use
+  short-lived (60 s) per-job tokens in the query string instead of the
+  session token. Failed logins are rate-limited per username+IP.
+- Every mutating API call, every login attempt (username kept, password
+  never) and every reveal of a stored LUKS passphrase is appended to
+  `output/audit.jsonl`, bounded at ~20k events. Admins can read it in the UI.
 - The OpenAPI schema at `/docs` is intentionally readable without login; every
-  endpoint it describes requires auth.
+  endpoint it describes requires auth (403 for an authenticated principal
+  whose role is insufficient).
 - For UEFI Secure Boot targets you must sign the iPXE binary / use a signed
   shim chain; by default, disable Secure Boot on the targets during imaging.
 

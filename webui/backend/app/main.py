@@ -11,7 +11,10 @@ from fastapi.staticfiles import StaticFiles
 import importlib
 import pkgutil
 
+from fastapi import Request
+
 from app import __version__
+from app import audit as _audit
 from app import routers as _routers
 
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__), "..", "static"))
@@ -19,6 +22,39 @@ STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__)
 # The SPA is served same-origin (and the vite dev server proxies /api), so no
 # CORS policy is needed — browsers then refuse cross-origin API use outright.
 app = FastAPI(title="Flipside UI", version=__version__)
+
+
+# Paths where the middleware below must not write audit entries: the machine
+# endpoints (a fleet imaging itself would flood the log with rows that say
+# nothing about people), and login, which the auth router records itself with
+# the attempted username — the middleware only ever sees "anonymous 401".
+_UNAUDITED = {"/api/imaging/report", "/api/imaging/checkin", "/api/auth/login"}
+
+
+@app.middleware("http")
+async def audit_mutations(request: Request, call_next):
+    """One audit line per non-GET API call, written after the response exists.
+
+    Middleware rather than per-endpoint calls, for the same reason every
+    router is auto-mounted below: a hand-maintained list is the thing that
+    drifts. A new mutating endpoint is audited the day it is written. The
+    principal is stashed on request.state by the auth dependency; a request
+    that never authenticated is recorded as anonymous, which for a mutating
+    call is worth a line too — that is someone knocking.
+    """
+    response = await call_next(request)
+    if request.method != "GET" and request.url.path.startswith("/api") \
+            and request.url.path not in _UNAUDITED:
+        principal = getattr(request.state, "principal", None)
+        _audit.record(
+            actor=principal.name if principal else "-",
+            role=principal.role if principal else "",
+            method=request.method, path=request.url.path,
+            status=response.status_code,
+            ip=request.client.host if request.client else "",
+            summary=getattr(request.state, "audit_summary", ""),
+        )
+    return response
 
 
 @app.get("/api/health")

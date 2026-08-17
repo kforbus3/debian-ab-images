@@ -179,8 +179,9 @@ cp webui/.env.example webui/.env   # set ADMIN_PASSWORD and SECRET_KEY
 make webui
 ```
 
-Open <http://localhost:8080>, log in with your `ADMIN_PASSWORD` (there is no
-username), and use the **Build** page
+Open <http://localhost:8080>, log in as username **`admin`** with your
+`ADMIN_PASSWORD` (further users and roles can be added under **Users** once
+you are in), and use the **Build** page
 (live log), **Images** library, and **Provisioning** pages. Details in
 [WEBUI.md](WEBUI.md).
 

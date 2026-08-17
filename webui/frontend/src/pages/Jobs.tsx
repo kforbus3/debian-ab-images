@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ListChecks, RefreshCw, XCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { api, apiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "../components/Toast";
 import { Button, Card, PageHeader, Spinner, Badge, LogView } from "../components/ui";
 
@@ -10,6 +11,7 @@ const STATUS_COLOR: Record<string, string> = { success: "green", running: "amber
 
 export default function Jobs() {
   const toast = useToast();
+  const { canOperate } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<string>("");
@@ -59,7 +61,8 @@ export default function Jobs() {
                   <span className="text-xs text-zinc-500">{j.started && new Date(j.started).toLocaleString()}</span>
                   <Badge color={STATUS_COLOR[j.status] || "zinc"}>{j.status}</Badge>
                   {j.status === "running" && (
-                    <Button variant="danger" size="sm" onClick={(e) => { e.stopPropagation(); cancel(j.id); }}>
+                    <Button variant="danger" size="sm" disabled={!canOperate} title={canOperate ? undefined : "Your viewer role is read-only"}
+                            onClick={(e) => { e.stopPropagation(); cancel(j.id); }}>
                       <XCircle size={13} /> Cancel
                     </Button>
                   )}

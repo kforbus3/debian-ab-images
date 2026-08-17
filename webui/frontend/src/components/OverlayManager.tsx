@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FilePlus, Upload, FolderUp, Trash2, Pencil, Download, RefreshCw, Save, X, CornerUpRight } from "lucide-react";
 import { api, apiError, fmtBytes } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "./Toast";
 import { Button, Input, Label, Badge, Alert } from "./ui";
 import { planDirUpload, MAX_DIR_FILES, MAX_DIR_BYTES } from "../lib/overlayUpload";
@@ -18,6 +19,9 @@ const LIKELY_EXECUTABLE = /^\/(usr\/local\/(s?bin)|usr\/(s?bin)|s?bin|opt\/[^/]+
 
 export default function OverlayManager({ onChange }: { onChange?: (count: number) => void }) {
   const toast = useToast();
+  // Viewers get the same read-only treatment as a read-only mount: every
+  // control disabled, with the reason said once at the top.
+  const { canOperate } = useAuth();
   const [files, setFiles] = useState<OverlayFile[] | null>(null);
   const [dir, setDir] = useState("");
   const [readonlyReason, setReadonlyReason] = useState("");
@@ -53,7 +57,7 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
   }
   useEffect(() => { load(); }, []);
 
-  const ro = !!readonlyReason;
+  const ro = !!readonlyReason || !canOperate;
 
   function newFile() {
     setEditing({ path: "", original: "", content: "", mode: "0644", isNew: true });
@@ -210,10 +214,11 @@ export default function OverlayManager({ onChange }: { onChange?: (count: number
   return (
     <div className="space-y-4">
       {ro && (
-        <Alert title="Files cannot be changed from here" items={[
-          readonlyReason,
-          `They can still be managed on the host, under ${dir}.`,
-        ]} />
+        <Alert title="Files cannot be changed from here" items={
+          readonlyReason
+            ? [readonlyReason, `They can still be managed on the host, under ${dir}.`]
+            : ["Your viewer role is read-only — an operator or admin can change image files."]
+        } />
       )}
 
       <div className="flex flex-wrap items-center gap-2">

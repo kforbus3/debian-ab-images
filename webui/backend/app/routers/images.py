@@ -5,13 +5,13 @@ from fastapi.responses import FileResponse
 
 from app import orchestrator as orch
 from app.config import settings
-from app.security import require_auth
+from app.security import Principal, require_operator, require_viewer
 
 router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.get("")
-async def list_images(_: str = Depends(require_auth)):
+async def list_images(_: Principal = Depends(require_viewer)):
     items, imager_ready = orch.list_images()
     # imager_ready stays amd64-only for compatibility with anything already
     # reading it; imager_arches says which architectures can actually netboot.
@@ -24,12 +24,12 @@ async def list_images(_: str = Depends(require_auth)):
 
 
 @router.get("/disk")
-async def disk(_: str = Depends(require_auth)):
+async def disk(_: Principal = Depends(require_viewer)):
     return orch.disk_usage()
 
 
 @router.delete("/{name}")
-async def delete_image(name: str, _: str = Depends(require_auth)):
+async def delete_image(name: str, _: Principal = Depends(require_operator)):
     try:
         orch.delete_image(name)
     except FileNotFoundError:
@@ -40,7 +40,7 @@ async def delete_image(name: str, _: str = Depends(require_auth)):
 
 
 @router.get("/{name}/download")
-async def download_image(name: str, _: str = Depends(require_auth)):
+async def download_image(name: str, _: Principal = Depends(require_viewer)):
     if "/" in name or ".." in name:
         raise HTTPException(400, "Invalid name")
     path = os.path.join(settings.output_dir, name)

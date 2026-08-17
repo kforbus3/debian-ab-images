@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Hammer, Cpu, XCircle, FolderPlus } from "lucide-react";
 import { api, apiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useToast } from "../components/Toast";
 import { Button, Card, Input, Label, Select, PageHeader, LogView, Badge, Alert, ProgressBar, Modal } from "../components/ui";
 import OverlayManager from "../components/OverlayManager";
@@ -54,6 +55,7 @@ const DESKTOP_MIN_ROOT = 10240;
 
 export default function Build() {
   const toast = useToast();
+  const { canOperate } = useAuth();
   const [opts, setOpts] = useState({
     distro: "debian", suite: "trixie", arch: "amd64",
     profile: "minimal", desktop: "gnome",
@@ -200,9 +202,9 @@ export default function Build() {
           {ARCHES.map((a) => {
             const built = imagerArches?.[a.value];
             return (
-              <Button key={a.value} variant="secondary" size="sm" disabled={running}
+              <Button key={a.value} variant="secondary" size="sm" disabled={running || !canOperate}
                       onClick={() => startImager(a.value)}
-                      title={built ? `Rebuild the ${a.label} imager` : `Build the ${a.label} imager`}>
+                      title={!canOperate ? "Your viewer role is read-only" : built ? `Rebuild the ${a.label} imager` : `Build the ${a.label} imager`}>
                 <Cpu size={13} />
                 {a.label}
                 <span className={built ? "text-emerald-400" : "text-zinc-500"}>
@@ -555,7 +557,8 @@ export default function Build() {
           </div>
 
           <Button className="mt-4 w-full" loading={running} onClick={startImage}
-            disabled={!opts.password || sizeTooSmall || (opts.encrypt && !opts.luks_passphrase && !opts.store_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
+            title={canOperate ? undefined : "Your viewer role is read-only"}
+            disabled={!canOperate || !opts.password || sizeTooSmall || (opts.encrypt && !opts.luks_passphrase && !opts.store_passphrase) || (opts.encrypt && opts.unlock === "tang" && !opts.tang_url)}>
             <Hammer size={15} /> {running ? "Building…" : "Start build"}
           </Button>
           {!opts.password && <p className="mt-2 text-xs text-amber-400">Set a login password to enable the build.</p>}
@@ -573,7 +576,7 @@ export default function Build() {
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold">Build log</h2>
             <div className="flex items-center gap-2">
-              {running && <Button variant="danger" size="sm" onClick={cancel}><XCircle size={13} /> Cancel</Button>}
+              {running && canOperate && <Button variant="danger" size="sm" onClick={cancel}><XCircle size={13} /> Cancel</Button>}
               {status && <Badge color={status === "success" ? "green" : status === "running" ? "amber" : "red"}>{status}</Badge>}
             </div>
           </div>

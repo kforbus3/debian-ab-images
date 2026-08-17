@@ -8,7 +8,8 @@ from starlette.concurrency import run_in_threadpool
 from app import orchestrator as orch
 from app import secretstore
 from app.jobs import _ProgressEvent as ProgressEvent, jobs
-from app.security import create_stream_token, require_auth, verify_stream_token
+from app.security import (Principal, create_stream_token, require_operator,
+                          require_viewer, verify_stream_token)
 
 router = APIRouter(tags=["builds"])
 
@@ -94,7 +95,7 @@ def _validate_build(opts: dict) -> None:
 
 
 @router.get("/preflight")
-async def preflight(_: str = Depends(require_auth)):
+async def preflight(_: Principal = Depends(require_viewer)):
     """Whether the UI can actually drive the builder, and what to fix if not."""
     problems = orch.preflight()
     return {"ready": not problems, "problems": problems,
@@ -106,7 +107,7 @@ async def preflight(_: str = Depends(require_auth)):
 
 
 @router.post("/builds")
-async def start_build(opts: dict = Body(...), _: str = Depends(require_auth)):
+async def start_build(opts: dict = Body(...), _: Principal = Depends(require_operator)):
     _require_ready()
     _validate_build(opts)
     if jobs.running(type="image"):
@@ -188,7 +189,7 @@ async def _store_generated_passphrase(opts: dict) -> str:
 
 
 @router.post("/imager/build")
-async def start_imager(body: dict = Body(default={}), _: str = Depends(require_auth)):
+async def start_imager(body: dict = Body(default={}), _: Principal = Depends(require_operator)):
     _require_ready()
     if jobs.running(type="imager"):
         raise HTTPException(409, "An imager build is already running")
@@ -201,12 +202,12 @@ async def start_imager(body: dict = Body(default={}), _: str = Depends(require_a
 
 
 @router.get("/jobs")
-async def list_jobs(_: str = Depends(require_auth)):
+async def list_jobs(_: Principal = Depends(require_viewer)):
     return jobs.list()
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str, _: str = Depends(require_auth)):
+async def get_job(job_id: str, _: Principal = Depends(require_viewer)):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -214,7 +215,7 @@ async def get_job(job_id: str, _: str = Depends(require_auth)):
 
 
 @router.post("/jobs/{job_id}/cancel")
-async def cancel_job(job_id: str, _: str = Depends(require_auth)):
+async def cancel_job(job_id: str, _: Principal = Depends(require_operator)):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -223,10 +224,10 @@ async def cancel_job(job_id: str, _: str = Depends(require_auth)):
 
 
 @router.get("/jobs/{job_id}/stream-token")
-async def stream_token(job_id: str, _: str = Depends(require_auth)):
+async def stream_token(job_id: str, principal: Principal = Depends(require_viewer)):
     if not jobs.get(job_id):
         raise HTTPException(404, "Job not found")
-    return {"token": create_stream_token(job_id)}
+    return {"token": create_stream_token(job_id, subject=principal.name)}
 
 
 @router.get("/jobs/{job_id}/stream")
