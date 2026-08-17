@@ -148,7 +148,10 @@ sync
 umount /mnt/slot
 cryptsetup close verify-root 2>/dev/null || true
 losetup -d "$LO"
-trap - EXIT
+# Loop work is done; keep a disk-removal trap armed for the boot phase. The
+# scratch disk is ~8 GB and every suite test leaving one behind filled the CI
+# runner mid-suite (2026-08-16). The evidence a failure needs is the logs.
+trap 'rm -f "$DISK"' EXIT
 
 # --- boot ---------------------------------------------------------------------
 echo ""

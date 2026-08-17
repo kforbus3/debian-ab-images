@@ -298,6 +298,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Make room on the runner
+        run: |
+          # The suite builds two full images and boots a dozen scratch disks.
+          # The stock runner image donates ~30 GB of toolchains nothing here
+          # uses -- and the 2026-08-16 run died at "Each state model boots"
+          # with "No space left on device", the runner unable to write even
+          # its own diagnostic log. The tests now also remove their scratch
+          # disks on exit; this reclaims the rest of the headroom.
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+
       - name: Build an image
         run: |
           ./builder/run.sh --arch amd64 --distro debian --suite trixie \

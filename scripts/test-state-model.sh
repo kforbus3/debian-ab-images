@@ -58,7 +58,11 @@ for n in $(ls /sys/class/block/ | sed -n "s/^${BB}p//p" | sort -n); do
     rm -f "/dev/${BB}p$n"; mknod "/dev/${BB}p$n" b "$mj" "$mn"
 done
 cleanup() { umount /mnt/slot 2>/dev/null; umount /mnt/boot 2>/dev/null
-            losetup -d "$LO" 2>/dev/null; }
+            losetup -d "$LO" 2>/dev/null
+            # Scratch only: the evidence a failure needs is the logs. Every
+            # test in the suite leaving its ~8 GB disk behind filled the CI
+            # runner and killed it mid-suite (2026-08-16).
+            rm -f "$DISK"; }
 trap cleanup EXIT
 
 # --- read the manifest out of the image --------------------------------------
@@ -190,7 +194,7 @@ set_order() {
     umount /mnt/boot
 }
 
-losetup -d "$LO"; trap - EXIT
+losetup -d "$LO"; trap 'rm -f "$DISK"' EXIT   # scratch disk only; logs carry the evidence
 
 boot() {                       # boot <label>
     echo ""

@@ -32,6 +32,9 @@ fail() { echo "HARNESS-FAIL: $*"; exit 1; }
 
 rm -f "$DISK"
 truncate -s "$SIZE" "$DISK"
+# Scratch only; logs carry the evidence. Suite tests leaving their ~8 GB
+# disks behind filled the CI runner mid-suite (2026-08-16).
+trap 'rm -f "$DISK"' EXIT
 dd if="$SRC" of="$DISK" bs=4M conv=notrunc status=none || fail "dd"
 
 # --- the imager's post-write steps -------------------------------------------
