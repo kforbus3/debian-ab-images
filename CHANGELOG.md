@@ -2,6 +2,49 @@
 
 Notable changes per release. Dates are the tag date.
 
+## v0.8.0 — 2026-08-17
+
+**Images now come in profiles: Minimal, Server, and Desktop.** Fleets are not
+only headless machines — images deploy to desktops and laptops where a
+graphical login is expected, and the only route there was hand-typing package
+lists nobody could remember. `--profile` (and a Profile select in the web UI)
+names the intent:
+
+- **minimal** — exactly the base system this builder has always produced. The
+  flag only names it; existing builds change in nothing, which a test now
+  proves.
+- **server** — the small headless-admin set the base still lacks: `rsync htop
+  less nano tmux`. openssh-server and curl were already in the base; anything
+  more belongs in `--packages`.
+- **desktop** — a full graphical login. `--desktop gnome|kde|xfce|mate|
+  cinnamon|lxqt` on Debian (the `task-*` metapackages), `gnome|kde|xfce|mate|
+  lxqt` on Ubuntu (the flavour metas). NetworkManager comes along for laptops,
+  and on Debian so does the wifi and graphics firmware laptops actually have —
+  the images' sources already carried `non-free-firmware`.
+
+What makes desktop actually work, rather than merely contain packages: the
+desktop metas deliver the desktop itself through Recommends, so they get their
+own apt run *with* recommends while the base system keeps
+`--no-install-recommends`; the default target is forced to graphical rather
+than trusting a postinst; `systemd-networkd` is disabled in favour of
+NetworkManager so two DHCP clients never fight over one NIC; and the
+root-slot floor rises to 10 GiB for the profile, so a slot too small for a
+desktop tree is corrected up front instead of failing an hour into dpkg.
+
+An impossible combination — cinnamon on Ubuntu, a typo, `--desktop` without
+the desktop profile — is refused before any work happens, on both surfaces:
+the web UI answers 400 naming the environments that ARE available for the
+distro, and `build-image.sh` dies at argument-parse time, proven by a new
+unprivileged test whose every case must leave its working directory empty.
+
+**The boot suite can finally finish.** The first run to get past slot
+stability died of a full disk: every test parks an ~8 GB scratch disk in
+`output/` and the suite now runs enough of them for the sum to matter — the
+runner could not write even its own diagnostic log. Each harness now removes
+its scratch disk on exit (the logs are the evidence; the disks were never
+uploaded), and the boot job starts by returning the ~30 GB of preinstalled
+toolchains the stock runner donates.
+
 ## v0.7.0 — 2026-08-16
 
 **The project is now Flipside** (formerly `debian-ab-images` — old URLs
