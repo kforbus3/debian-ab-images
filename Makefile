@@ -11,8 +11,17 @@ USERNAME ?= debian
 PASSWORD ?= debian
 # "auto" = smallest possible image; it expands to fill the disk on first boot
 IMAGE_SIZE ?= auto
-ROOT_SIZE ?= 3072
+# Root slot size in MiB. Empty = the builder picks the default for the distro
+# and profile (3072, raised to the floor an Ubuntu or desktop build needs) —
+# setting it here would count as an explicit choice and pin every build to it.
+ROOT_SIZE ?=
 COMPRESS ?= zstd
+# Build profile: minimal (default — exactly the base system, nothing added),
+# server (a small headless-admin set), or desktop (a full graphical login;
+# pick the environment with DESKTOP=gnome|kde|xfce|mate|cinnamon|lxqt —
+# availability differs per distro, see docs/BUILDER.md#profiles).
+PROFILE ?=
+DESKTOP ?=
 # Extra packages to install into the image, space-separated
 # (e.g. `make image PACKAGES="vim curl qemu-guest-agent"`)
 PACKAGES ?=
@@ -48,10 +57,11 @@ help: ## Show this help
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: image
-image: ## Build the A/B disk image into ./output (SUITE=, PACKAGES=, ENCRYPT=1, STATE_MODEL=stateful|appliance)
+image: ## Build the A/B disk image into ./output (SUITE=, PROFILE=minimal|server|desktop, DESKTOP=, PACKAGES=, ENCRYPT=1, STATE_MODEL=stateful|appliance)
 	./builder/run.sh --suite $(SUITE) $(if $(HOSTNAME),--hostname $(HOSTNAME)) \
 	  --username $(USERNAME) --password '$(PASSWORD)' \
-	  --image-size $(IMAGE_SIZE) --root-size $(ROOT_SIZE) --compress $(COMPRESS) \
+	  --image-size $(IMAGE_SIZE) $(if $(ROOT_SIZE),--root-size $(ROOT_SIZE)) --compress $(COMPRESS) \
+	  $(if $(PROFILE),--profile $(PROFILE)) $(if $(DESKTOP),--desktop $(DESKTOP)) \
 	  $(if $(PACKAGES),--packages "$(PACKAGES)") \
 	  $(if $(STATE_MODEL),--state-model $(STATE_MODEL)) \
 	  $(if $(SLOT_PRIVATE_UPPER),--slot-private-upper) \

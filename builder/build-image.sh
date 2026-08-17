@@ -21,13 +21,21 @@ MIRROR="${MIRROR:-}"                    # empty = distro default
 HOSTNAME_="${HOSTNAME_:-}"              # empty = <distro>-ab
 USERNAME="${USERNAME:-debian}"
 PASSWORD="${PASSWORD:-debian}"
-ROOT_SIZE="${ROOT_SIZE:-3072}"
+ROOT_SIZE="${ROOT_SIZE:-}"              # empty = profile default (3072, or the
+                                        # desktop floor); see MIN_ROOT below
 BOOT_SIZE="${BOOT_SIZE:-512}"
 ESP_SIZE="${ESP_SIZE:-128}"
 OVERLAY_MIN="${OVERLAY_MIN:-}"          # empty = from the state model; see below
 IMAGE_SIZE="${IMAGE_SIZE:-auto}"        # GiB, or "auto" = smallest possible
 OUTPUT="${OUTPUT:-}"                    # empty = /output/<distro>-<suite>-ab.img
 EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
+# Build profile: what the image is *for*, spelled as a named package set rather
+# than a list everyone retypes. minimal is exactly the base system this project
+# has always built -- the flag only names it, so existing builds change in
+# nothing. server and desktop add to it; see the profile resolution below.
+PROFILE="${PROFILE:-minimal}"           # minimal | server | desktop
+DESKTOP_ENV="${DESKTOP_ENV:-}"          # desktop profile only; empty = gnome
+DESKTOP_SET=false                       # was --desktop given explicitly?
 OVERLAY_D="${OVERLAY_D:-/overlay.d}"     # your files, copied over the whole root
 RUN_SCRIPT="${RUN_SCRIPT:-}"             # script run inside the chroot at the end
 OWN_PATHS="${OWN_PATHS:-}"               # paths the image owns; see image-owned.list
@@ -77,7 +85,16 @@ Usage: $0 [options]
   --hostname NAME         Image hostname (default: $HOSTNAME_)
   --username NAME         Login user to create (default: $USERNAME)
   --password PASS         Password for that user (default: $USERNAME)
-  --root-size MiB         Size of each root slot (default: $ROOT_SIZE)
+  --profile NAME          minimal|server|desktop (default: minimal, which is
+                          exactly the base system with nothing added).
+                          server adds a small headless-admin set; desktop
+                          installs a full graphical environment.
+  --desktop ENV           Desktop environment for --profile desktop (default:
+                          gnome). Debian: gnome kde xfce mate cinnamon lxqt;
+                          Ubuntu: gnome kde xfce mate lxqt.
+  --root-size MiB         Size of each root slot (default: 3072, raised to the
+                          distro/profile minimum -- a desktop build needs
+                          10240; see the docs)
   --image-size GiB|auto   Total image size (default: auto = smallest possible;
                           the overlay partition expands to fill the target disk
                           on first boot either way)
@@ -151,6 +168,8 @@ while [[ $# -gt 0 ]]; do
         --image-size) IMAGE_SIZE="$2"; shift 2;;
         --output) OUTPUT="$2"; shift 2;;
         --packages) EXTRA_PACKAGES="$2"; shift 2;;
+        --profile) PROFILE="$2"; shift 2;;
+        --desktop) DESKTOP_ENV="$2"; DESKTOP_SET=true; shift 2;;
         --overlay-dir) OVERLAY_D="$2"; shift 2;;
         --run-script) RUN_SCRIPT="$2"; shift 2;;
         --own-path) OWN_PATHS="$OWN_PATHS $2"; shift 2;;
@@ -341,6 +360,88 @@ if [ -z "$DISTRO" ]; then
         *) DISTRO=debian;;
     esac
 fi
+# --- Resolve the build profile -----------------------------------------------
+#
+# Validated here, before anything is allocated or built, for the same reason the
+# state manifest is: a wrong profile/desktop combination discovered after
+# debootstrap has already cost twenty minutes, and the refusal has to happen
+# while there is still a person at the other end to read it.
+#
+# PROFILE_PACKAGES joins the base --no-install-recommends install.
+# DESKTOP_PACKAGES is installed in its own apt run WITH recommends -- see the
+# chroot setup script for why the difference is the whole feature.
+PROFILE_PACKAGES=""
+DESKTOP_PACKAGES=""
+case "$PROFILE" in
+    minimal)
+        # Exactly the base system, as this builder has always produced it. The
+        # flag names today's behaviour; it must never add to it.
+        ;;
+    server)
+        # What a headless server still lacks after the base install. The base
+        # already ships openssh-server, curl, sudo and ca-certificates (see the
+        # chroot setup script), so this is deliberately short:
+        #   rsync  moving files and backups on/off the machine
+        #   htop   "what is this machine doing right now"
+        #   less   reading logs without an editor (minbase has no pager)
+        #   nano   editing config over SSH without vi knowledge
+        #   tmux   a shell that survives the SSH session dropping
+        # Anything beyond this belongs in --packages, not baked into the
+        # profile -- and notably NOT qemu-guest-agent: these images deploy to
+        # real machines as often as VMs.
+        PROFILE_PACKAGES="rsync htop less nano tmux"
+        ;;
+    desktop)
+        DESKTOP_ENV="${DESKTOP_ENV:-gnome}"
+        # Each distro curates its own desktop metapackages, under different
+        # names, and not every environment exists on both -- so the refusal
+        # lists what IS available for the distro being built rather than
+        # leaving the caller to guess a spelling.
+        case "$DISTRO" in
+            debian) DE_AVAILABLE="gnome kde xfce mate cinnamon lxqt";;
+            ubuntu) DE_AVAILABLE="gnome kde xfce mate lxqt";;
+            *) die "--distro must be debian or ubuntu (got '$DISTRO')";;
+        esac
+        case "$DISTRO/$DESKTOP_ENV" in
+            debian/gnome)    DESKTOP_META="task-gnome-desktop";;
+            debian/kde)      DESKTOP_META="task-kde-desktop";;
+            debian/xfce)     DESKTOP_META="task-xfce-desktop";;
+            debian/mate)     DESKTOP_META="task-mate-desktop";;
+            debian/cinnamon) DESKTOP_META="task-cinnamon-desktop";;
+            debian/lxqt)     DESKTOP_META="task-lxqt-desktop";;
+            ubuntu/gnome)    DESKTOP_META="ubuntu-desktop-minimal";;
+            ubuntu/kde)      DESKTOP_META="kde-plasma-desktop";;
+            ubuntu/xfce)     DESKTOP_META="xubuntu-core";;
+            ubuntu/mate)     DESKTOP_META="ubuntu-mate-core";;
+            ubuntu/lxqt)     DESKTOP_META="lubuntu-desktop";;
+            *) die "--desktop: no '$DESKTOP_ENV' desktop for $DISTRO.
+    Available for $DISTRO: $DE_AVAILABLE";;
+        esac
+        # network-manager explicitly, though most of the metas recommend it:
+        # this profile exists for desktops and laptops, and a laptop without
+        # NetworkManager has wifi hardware and no way to join a network from
+        # the desktop it just logged in to. Redundant where the meta already
+        # brings it, which costs nothing.
+        DESKTOP_PACKAGES="$DESKTOP_META network-manager"
+        # Debian only: firmware for the wifi/graphics hardware laptops actually
+        # have. The image's sources.list already carries non-free-firmware (it
+        # is written for every Debian build, further down), so these install
+        # without touching the sources. Ubuntu needs none of this --
+        # linux-image-generic hard-depends on linux-firmware, so every Ubuntu
+        # image already ships the full firmware set.
+        if [ "$DISTRO" = debian ]; then
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES firmware-linux firmware-iwlwifi firmware-realtek firmware-atheros"
+        fi
+        ;;
+    *) die "--profile must be minimal, server or desktop (got '$PROFILE')";;
+esac
+# Refused rather than ignored: someone who typed --desktop kde wanted a desktop
+# image, and silently building a minimal one would only be discovered at a
+# console login prompt on deployed hardware.
+if [ "$DESKTOP_SET" = true ] && [ "$PROFILE" != desktop ]; then
+    die "--desktop only means anything with --profile desktop (profile is '$PROFILE')"
+fi
+
 # Everything that differs between architectures is decided here rather than
 # scattered through the build. amd64 keeps the hybrid BIOS+UEFI boot the fleet
 # relies on; arm64 has no BIOS to fall back to and is UEFI-only, with its own
@@ -404,6 +505,15 @@ case "$DISTRO" in
     ubuntu) MIN_ROOT=5120;;
     *)      MIN_ROOT=2560;;
 esac
+# A desktop environment is several GiB installed before the user's first login
+# -- Debian's task-gnome-desktop with its recommends is the largest -- and a
+# slot that cannot hold it fails as "No space left on device" an hour into dpkg,
+# not here. Raise the floor for the profile the same way it is raised for
+# Ubuntu's kernel: the caller asked for a desktop image, and a slot too small to
+# hold one is never what they wanted.
+if [ "$PROFILE" = desktop ]; then
+    [ "$MIN_ROOT" -lt 10240 ] && MIN_ROOT=10240
+fi
 
 OS_PRETTY="$(tr '[:lower:]' '[:upper:]' <<< "${DISTRO:0:1}")${DISTRO:1}"
 HOSTNAME_="${HOSTNAME_:-${DISTRO}-ab}"
@@ -431,6 +541,16 @@ if [ "$ENCRYPT" = true ]; then
         *) die "--unlock must be passphrase|keyfile|tpm2|tang";;
     esac
     [ "$UNLOCK" = tang ] && [ -z "$TANG_URL" ] && die "--unlock tang requires --tang-url"
+fi
+
+# The default slot is the historical 3072 MiB, lifted straight to the floor
+# where the floor is higher -- so a default desktop or Ubuntu build starts at a
+# size that fits rather than starting small and being raised with a warning
+# about a number nobody typed. An explicit --root-size (or ROOT_SIZE in the
+# environment) is honoured, subject only to the raise below.
+if [ -z "$ROOT_SIZE" ]; then
+    ROOT_SIZE=3072
+    [ "$ROOT_SIZE" -lt "$MIN_ROOT" ] && ROOT_SIZE="$MIN_ROOT"
 fi
 
 # Raise rather than refuse: the caller asked for an image, and a slot too small
@@ -470,7 +590,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "Building image  distro=$DISTRO suite=$SUITE  encrypt=$ENCRYPT  unlock=$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo n/a)  ssh-key-only=$SSH_KEY_ONLY"
+log "Building image  distro=$DISTRO suite=$SUITE  profile=$PROFILE$([ "$PROFILE" = desktop ] && echo "/$DESKTOP_ENV")  encrypt=$ENCRYPT  unlock=$([ "$ENCRYPT" = true ] && echo "$UNLOCK" || echo n/a)  ssh-key-only=$SSH_KEY_ONLY"
 
 E_START=2
 E_END=$((E_START + ESP_SIZE))
@@ -753,6 +873,35 @@ luks-overlay      PARTLABEL=overlay        $KEYREF_OVL   luks,discard,initramfs$
 EOF
 fi
 
+# The desktop metas get their own apt run WITH recommends -- the opposite of
+# every other install here, and the difference is the whole feature. Debian's
+# task-* packages and Ubuntu's flavour metas carry most of the actual desktop
+# (xorg, the display manager, network-manager, the applications) as Recommends,
+# because that is how tasksel installs them; under --no-install-recommends
+# task-xfce-desktop unpacks a few hundred kilobytes of metapackage and the
+# "desktop" image boots to a console. Kept out of the base line so the base
+# system itself still takes no recommends.
+#
+# set-default is belt and braces: the display manager's postinst normally flips
+# the default target, but "normally" is not a boot guarantee, and a desktop
+# image that comes up at a text console looks exactly like a failed build to
+# whoever is standing at the machine.
+#
+# No backticks or $( ) in this fragment: the heredoc below is unquoted, so they
+# would be command substitution executed by the builder, not text.
+# networkd is disabled again for this profile because the desktop install
+# brings NetworkManager, and two DHCP clients managing the same NIC fight over
+# the address -- networkd is enabled a few lines earlier in the same script, so
+# the fragment runs after it and simply wins. NM covers wired and wifi both,
+# which is the point on a laptop; the 10-dhcp.network file stays behind, inert,
+# for anyone who deliberately re-enables networkd.
+DESKTOP_SETUP=""
+if [ "$PROFILE" = desktop ]; then
+    DESKTOP_SETUP="apt-get install -y ${DESKTOP_PACKAGES}
+systemctl set-default graphical.target
+systemctl disable systemd-networkd"
+fi
+
 step "Installing kernel, bootloader, and tooling in chroot"
 # Keep APT's downloaded .debs OUT of the root slot. Ubuntu pulls ~460 MB of
 # archives (linux-firmware and linux-modules-extra dominate), and holding those
@@ -773,7 +922,7 @@ apt-get install -y --no-install-recommends \
     ${KERNEL_PKG} initramfs-tools ${GRUB_PKGS} \
     openssh-server sudo ca-certificates curl \
     ${RESOLVED_PKG} cloud-guest-utils gdisk parted e2fsprogs \
-    rauc ${CRYPT_PACKAGES} ${EXTRA_PACKAGES}
+    rauc ${CRYPT_PACKAGES} ${PROFILE_PACKAGES} ${EXTRA_PACKAGES}
 
 # Debian splits RAUC in two: the rauc package is the command, rauc-service is
 # the D-Bus service it talks to. With only the former, "rauc install" and
@@ -792,6 +941,8 @@ if [ ! -e /usr/share/dbus-1/system-services/de.pengutronix.rauc.service ]; then
 fi
 
 systemctl enable ssh systemd-networkd systemd-resolved
+
+${DESKTOP_SETUP}
 
 useradd -m -s /bin/bash -G sudo "${USERNAME}"
 echo "${USERNAME}:${PASSWORD}" | chpasswd
@@ -1297,6 +1448,8 @@ cat > "${OUT}.json" <<EOF
   "distro": "$DISTRO",
   "suite": "$SUITE",
   "arch": "$ARCH",
+  "profile": "$PROFILE",
+  "desktop": "$DESKTOP_ENV",
   "hostname": "$HOSTNAME_",
   "username": "$USERNAME",
   "image_size_gib": $(awk "BEGIN{printf \"%.2f\", $TOTAL_MIB/1024}"),

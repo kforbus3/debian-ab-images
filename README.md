@@ -80,6 +80,11 @@ GPT:
 - **Unique machine identity**: the image ships with a blank `machine-id` and no
   SSH host keys; each machine generates its own on first boot and keeps them
   across A/B updates (stored in the overlay).
+- **Build profiles** — `minimal` (the default: exactly the base system),
+  `server` (a small headless-admin set), or `desktop` (a full graphical login:
+  GNOME/KDE/Xfce/MATE/Cinnamon/LXQt on Debian, the flavour metas on Ubuntu,
+  with NetworkManager and wifi firmware for laptops) — see
+  [docs/BUILDER.md](docs/BUILDER.md#profiles).
 
 ## Quick start
 

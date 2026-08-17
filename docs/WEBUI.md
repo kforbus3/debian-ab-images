@@ -8,7 +8,9 @@ through the Docker socket.
 ## Features
 
 - **Build wizard** — pick distribution (Debian or Ubuntu), release, hostname,
-  user, sizes, compression, and extra packages, then start a build and watch a
+  user, sizes, compression, and extra packages — plus a **Profile**
+  (Minimal / Server / Desktop) and, for Desktop, an environment select whose
+  options follow the chosen distro — then start a build and watch a
   **progress bar and live log** in the browser (with cancel). The bar tracks 14
   named phases reported by the builder, so a long step like debootstrap or
   compression is identifiable rather than just slow. Navigating away and back

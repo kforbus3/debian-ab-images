@@ -39,12 +39,36 @@ def _validate_build(opts: dict) -> None:
     arch = opts.get("arch", "amd64")
     if arch not in _ARCHES:
         raise HTTPException(400, f"arch must be one of {', '.join(_ARCHES)}")
+    # Profile and desktop environment, refused here — before a job exists —
+    # with the choices that ARE available, exactly as build-image.sh refuses
+    # them. The mapping lives in the orchestrator so this and the build
+    # command can never disagree about what is buildable.
+    profile = str(opts.get("profile") or "minimal")
+    if profile not in orch.PROFILES:
+        raise HTTPException(400, f"profile must be one of {', '.join(orch.PROFILES)}")
+    desktop = str(opts.get("desktop") or "").strip()
+    if desktop and profile != "desktop":
+        raise HTTPException(
+            400, "a desktop environment only means anything with profile=desktop "
+                 f"(profile is '{profile}')")
+    min_root = _MIN_ROOT_MIB.get(opts.get("distro", "debian"), 2560)
+    if profile == "desktop":
+        distro = opts.get("distro", "debian")
+        envs = orch.DESKTOP_ENVS.get(distro)
+        if not envs:
+            raise HTTPException(400, "distro must be debian or ubuntu")
+        if (desktop or "gnome") not in envs:
+            raise HTTPException(
+                400, f"no '{desktop}' desktop for {distro} — "
+                     f"available: {', '.join(envs)}")
+        # The builder raises the slot to its desktop floor, so validate the
+        # image size against the slot it will actually build.
+        min_root = max(min_root, orch.MIN_ROOT_DESKTOP_MIB)
     size = opts.get("image_size", "auto")
     try:
         # 0 / "auto" = smallest possible; the image expands on first boot.
         image_mib = 0 if size in ("auto", 0, "0", "", None) else int(size) * 1024
-        root_mib = max(int(opts.get("root_size", 3072)),
-                       _MIN_ROOT_MIB.get(opts.get("distro", "debian"), 2560))
+        root_mib = max(int(opts.get("root_size", 3072)), min_root)
     except (TypeError, ValueError):
         raise HTTPException(400, "image_size and root_size must be numbers (or image_size 'auto')")
     if root_mib < 1024:

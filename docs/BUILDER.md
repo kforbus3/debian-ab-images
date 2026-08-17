@@ -23,6 +23,8 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--suite` | `trixie` | Release: `trixie`, `bookworm` (Debian); `resolute`, `noble`, `jammy` (Ubuntu) |
 | `--mirror` | distro default | APT mirror (`deb.debian.org` / `archive.ubuntu.com`) |
 | `--arch` | `amd64` | Target architecture |
+| `--profile` | `minimal` | `minimal` \| `server` \| `desktop` — named package sets; `minimal` is exactly the base system ([Profiles](#profiles)) |
+| `--desktop` | `gnome` | Desktop environment for `--profile desktop`; per-distro list in [Profiles](#profiles). An error without that profile |
 | `--hostname` | `debian-ab` | Image hostname |
 | `--username` | `debian` | Login user (added to `sudo`) |
 | `--password` | `debian` | Password for that user |
@@ -83,6 +85,7 @@ the binding constraint. The builder enforces a per-distro minimum and raises
 |--------|-------------------|-----|
 | Debian | 2560 MiB | base system + `linux-image-amd64` + initramfs |
 | Ubuntu | 5120 MiB | `linux-image-generic` **depends on** `linux-firmware` and `linux-modules-extra` (~1.7 GiB installed), which Debian never pulls in |
+| either, `--profile desktop` | 10240 MiB | the desktop metapackage and its recommends are several GiB installed before the first login — see [Profiles](#profiles) |
 
 Ubuntu needs roughly twice Debian's space for the same install. At Debian's
 default of 3072 MiB an Ubuntu build fills the slot partway through initramfs
@@ -94,6 +97,82 @@ output.
 APT's downloaded `.deb` archives are bind-mounted outside the root slot during
 installation, so Ubuntu's ~460 MiB of package downloads no longer count against
 it.
+
+## Profiles
+
+`--profile` names what the image is *for*, as a curated package set, instead of
+a list everyone retypes into `--packages`. The default is `minimal`, which is
+**exactly the base system described above** — the flag only names today's
+behaviour, so existing builds change in nothing. `--packages` remains additive
+with every profile.
+
+```bash
+make image PROFILE=server PASSWORD='ChangeMe123'
+make image PROFILE=desktop DESKTOP=kde PASSWORD='ChangeMe123'
+```
+
+### `server`
+
+What a headless server still lacks after the base install. The base image
+already ships `openssh-server`, `curl`, `sudo` and `ca-certificates`, so the
+set is deliberately short:
+
+| Package | Why |
+|---------|-----|
+| `rsync` | moving files and backups on and off the machine |
+| `htop` | "what is this machine doing right now" |
+| `less` | reading logs — minbase ships no pager at all |
+| `nano` | editing config over SSH without vi knowledge |
+| `tmux` | a shell that survives the SSH session dropping |
+
+Anything beyond this belongs in `--packages` — including `qemu-guest-agent`,
+which is deliberately *not* here: these images deploy to physical machines as
+often as VMs.
+
+### `desktop`
+
+Installs a full graphical environment, and the image boots to a **graphical
+login**: the metapackage brings a display manager, and the builder sets the
+systemd default target to `graphical.target` in the chroot so the login is
+graphical even if the package's own postinst did not flip it.
+
+`--desktop` picks the environment; without it the profile defaults to GNOME.
+(`--desktop` without `--profile desktop` is an error, not a hint.) Each
+distribution curates its own desktop metapackages under different names, and
+not every environment exists on both — an unavailable combination is refused
+up front with the list that *is* available:
+
+| `--desktop` | Debian installs | Ubuntu installs |
+|-------------|-----------------|-----------------|
+| `gnome` (default) | `task-gnome-desktop` | `ubuntu-desktop-minimal` |
+| `kde` | `task-kde-desktop` | `kde-plasma-desktop` |
+| `xfce` | `task-xfce-desktop` | `xubuntu-core` |
+| `mate` | `task-mate-desktop` | `ubuntu-mate-core` |
+| `cinnamon` | `task-cinnamon-desktop` | — (no Ubuntu flavour) |
+| `lxqt` | `task-lxqt-desktop` | `lubuntu-desktop` |
+
+The metapackage is installed **with recommends** — the opposite of everything
+else in the image, and on purpose. Debian's `task-*` packages and Ubuntu's
+flavour metas carry most of the actual desktop (xorg, the display manager, the
+applications) as Recommends, because that is how tasksel installs them;
+without recommends a "desktop" image is a few hundred kilobytes of
+metapackage and a console login. It also means these pull a **large dependency
+tree** — several GiB installed per root slot, and a much longer build.
+
+**Laptops, wifi and networking.** The desktop profile installs NetworkManager
+on both distributions, so wired and wifi are managed from the desktop
+(`systemd-networkd`, which the other profiles use for DHCP, is disabled for
+this one — two DHCP clients on the same NIC fight over the address). On Debian
+it also installs `firmware-linux`, `firmware-iwlwifi`, `firmware-realtek` and
+`firmware-atheros` — the graphics and wifi firmware laptops actually have; the
+image's APT sources already carry the `non-free-firmware` component, so
+machines can pull more from the same section later. Ubuntu needs no extra
+step: `linux-image-generic` already depends on the complete `linux-firmware`.
+
+**Size.** The root-slot floor for a desktop build is **10240 MiB** (table
+above), so with two slots a desktop image is ≈21 GiB raw where a minimal one
+is ≈7 GiB. An explicit `--root-size` above the floor is honoured; below it, it
+is raised with a warning like any other slot too small for its OS.
 
 ## Customization
 

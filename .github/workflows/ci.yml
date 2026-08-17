@@ -167,6 +167,23 @@ jobs:
           # name, which is a recovery key for a machine in the field. Silently.
           python tests/test_image_naming.py
 
+      - name: Build profiles reach the builder, bad combos never reach a job
+        working-directory: webui/backend
+        run: |
+          # A request that never mentions a profile must produce exactly the
+          # build command it always has, and a desktop the distro does not
+          # package (cinnamon on Ubuntu) must be a 400 naming the available
+          # ones -- before a job exists, not twenty minutes into a build.
+          python tests/test_build_profiles.py
+
+      - name: The builder refuses bad profile combos before doing any work
+        run: |
+          # Same refusals from build-image.sh itself, at argument-parse time:
+          # unprivileged, no Docker, and every case must leave its working
+          # directory empty -- a refusal that has already allocated something
+          # is validation that moved later than it claims.
+          bash scripts/test-profile-args.sh
+
       - name: SPA routing
         working-directory: webui/backend
         run: |
