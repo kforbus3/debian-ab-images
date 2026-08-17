@@ -169,6 +169,17 @@ jobs:
           # itself rather than filling the disk the builds need.
           python tests/test_audit.py
 
+      - name: OIDC single sign-on
+        working-directory: webui/backend
+        run: |
+          # Runs against a fake IdP in-process: real discovery, JWKS, PKCE
+          # code exchange and a signed ID token through the real app. Mostly
+          # it asserts refusals -- forged state, wrong nonce, wrong key,
+          # expired token, unmapped groups, and an IdP username colliding
+          # with a local account -- because an SSO bug's production shape is
+          # a stranger holding a session, not an error message.
+          python tests/test_oidc.py
+
       - name: Secrets-manager integration
         working-directory: webui/backend
         run: |

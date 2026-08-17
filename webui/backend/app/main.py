@@ -26,9 +26,12 @@ app = FastAPI(title="Flipside UI", version=__version__)
 
 # Paths where the middleware below must not write audit entries: the machine
 # endpoints (a fleet imaging itself would flood the log with rows that say
-# nothing about people), and login, which the auth router records itself with
-# the attempted username — the middleware only ever sees "anonymous 401".
-_UNAUDITED = {"/api/imaging/report", "/api/imaging/checkin", "/api/auth/login"}
+# nothing about people), and the two login-shaped POSTs, which their routers
+# record themselves with the attempted username — the middleware only ever
+# sees "anonymous 401" (and for the SSO exchange, the OIDC callback already
+# wrote the real login line).
+_UNAUDITED = {"/api/imaging/report", "/api/imaging/checkin", "/api/auth/login",
+              "/api/auth/oidc/exchange"}
 
 
 @app.middleware("http")

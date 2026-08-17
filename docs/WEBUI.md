@@ -197,6 +197,90 @@ change, and every reveal of a stored LUKS passphrase is appended to
 source IP. Admins can browse and filter it under **Audit Log**, or `grep` the
 file directly; it trims itself oldest-first past ~20,000 events.
 
+## Single sign-on (OIDC)
+
+The UI can authenticate against any conforming OpenID Connect provider —
+Keycloak, Authentik, Entra ID, Okta — using the authorization-code flow with
+PKCE. It is **entirely off** unless both `OIDC_ISSUER` and `OIDC_CLIENT_ID`
+are set, and password login keeps working either way: an IdP that is down or
+misconfigured only breaks the SSO button, never the login form or the rest of
+the app.
+
+Underneath, nothing changes. A successful SSO login produces an ordinary
+`users.json` record (with `source: "oidc"` and **no** password hash — such a
+record can never log in with a password) and mints the same opaque, revocable
+`fls_…` session a password login does. Roles, session expiry, revocation and
+the audit log all behave identically.
+
+**Environment reference** (set in `webui/.env`; compose passes them through):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OIDC_ISSUER` | *(unset — SSO off)* | Issuer URL, e.g. `https://auth.example.com/realms/lab`. Discovery is fetched lazily from `<issuer>/.well-known/openid-configuration` and cached for an hour. |
+| `OIDC_CLIENT_ID` | *(unset — SSO off)* | The client registered at the IdP. |
+| `OIDC_CLIENT_SECRET` | *(empty)* | Optional. Empty means a public client — valid, because the flow always uses PKCE. |
+| `OIDC_ROLE_CLAIM` | `groups` | The ID-token claim holding the user's groups. |
+| `OIDC_ROLE_MAP` | *(empty)* | Comma list of `idp-group=role`, e.g. `flipside-admins=admin,flipside-ops=operator,flipside-view=viewer`. A user in several mapped groups gets the **highest** role. |
+| `OIDC_DEFAULT_ROLE` | `deny` | What a user whose groups map to nothing gets: `deny` refuses them (audited); `viewer`/`operator`/`admin` admits everyone the IdP vouches for, at that role. |
+| `OIDC_DISPLAY_NAME` | `Single sign-on` | Label on the login page's SSO button. |
+| `OIDC_SCOPES` | `openid profile email` | Scopes requested. |
+
+**Admission is deny-by-default on purpose.** Being known to the IdP is
+authentication, not authorization: with `OIDC_DEFAULT_ROLE=deny`, a user none
+of whose groups appear in `OIDC_ROLE_MAP` is refused, the login page says so,
+and the refusal lands in the audit log. Set a default role only if everyone
+the IdP admits really should reach a UI that controls the Docker socket. The
+mapped role is re-resolved **on every login**, so a group change at the IdP
+propagates at the user's next sign-in — including downward. (A role changed
+by hand on the Users page is likewise overwritten at their next login; for
+SSO users the IdP's groups are authoritative.)
+
+**Local users cannot be taken over.** If the IdP asserts a username that
+already exists here as a local (password) user, the SSO login is **refused
+and audited** — never merged. Anything else would let whoever controls that
+username at the IdP inherit the local account's rank. Rename one of the two
+to resolve it. Disabling an SSO user on the Users page also wins over the
+IdP: they stay refused until re-enabled, even with a valid assertion. The
+usernames themselves come from `preferred_username` (falling back to the
+email's local part), lowercased and held to the same validation as local
+usernames.
+
+**Redirect URI.** The callback is `/api/auth/oidc/callback` on whatever
+origin the browser used, honoring `X-Forwarded-Proto`/`X-Forwarded-Host` —
+so behind the TLS reverse proxy from the [security note](#security-note)
+below, the redirect URI to register at the IdP is
+`https://webui.example.com/api/auth/oidc/callback`.
+
+**Worked example: Keycloak.** In a realm named `lab`:
+
+1. *Clients → Create client*: type OpenID Connect, client ID `flipside`,
+   standard flow on, valid redirect URI
+   `https://webui.example.com/api/auth/oidc/callback`. Either leave it public
+   (no secret; PKCE covers it) or enable client authentication and copy the
+   secret.
+2. Keycloak does not put groups in the ID token by default. On the client
+   (or a client scope), add a *Group Membership* mapper: token claim name
+   `groups`, full group path **off**, *Add to ID token* **on**.
+3. Create groups `flipside-admins`, `flipside-ops`, `flipside-view` and put
+   people in them.
+4. In `webui/.env`:
+
+```bash
+OIDC_ISSUER=https://auth.example.com/realms/lab
+OIDC_CLIENT_ID=flipside
+OIDC_CLIENT_SECRET=            # empty for a public client
+OIDC_ROLE_MAP=flipside-admins=admin,flipside-ops=operator,flipside-view=viewer
+```
+
+Restart the UI (`docker compose up -d`) and the login page grows the SSO
+button.
+
+Other IdPs differ mainly in where the groups claim comes from: **Entra ID**
+sends group **object GUIDs** (map the GUIDs, or configure the app to emit
+group names), and needs `groupMembershipClaims` enabled on the app
+registration; **Okta** needs a Groups claim filter on the authorization
+server; **Authentik** includes `groups` with its default scope mappings.
+
 ## Running it
 
 ```bash

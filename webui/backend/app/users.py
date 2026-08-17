@@ -214,6 +214,55 @@ def create(username: str, password: str, role: str) -> dict:
         return rec
 
 
+def upsert_sso(username: str, role: str, source: str = "oidc") -> dict:
+    """Create or refresh the record behind a successful SSO login.
+
+    The role is rewritten on every login so a group change at the IdP
+    propagates here at the next sign-in, not never. Two refusals are the
+    point of this function existing at all:
+
+    - A username that already belongs to a record this source does not own
+      (a local user, or another provider's) is refused outright. Silently
+      attaching an IdP identity to an existing local account is an account
+      takeover -- whoever controls that username at the IdP would inherit the
+      local user's rank -- so the collision is an error for an admin to
+      resolve, never a merge.
+    - A locally-disabled record stays refused. Disabling a user in this UI
+      must end their access even while the IdP still vouches for them.
+    """
+    name = _validate_username(username)
+    role = _validate_role(role)
+    with _lock:
+        users = load()
+        rec = users.get(name)
+        if rec is None:
+            rec = {
+                "username": name,
+                # Deliberately no password_hash: verify() refuses such records
+                # before bcrypt is consulted, so this user has exactly one way
+                # in -- the IdP.
+                "role": role,
+                "disabled": False,
+                "created": time.time(),
+                "last_login": time.time(),
+                "source": source,
+            }
+            users[name] = rec
+            _write(users)
+            return rec
+        if rec.get("source") != source or rec.get("password_hash"):
+            raise UserError(
+                f"the username {name} already belongs to a "
+                f"{rec.get('source') or 'local'} user here; refusing to attach "
+                "the SSO identity to it. Rename one of the two.")
+        if rec.get("disabled"):
+            raise UserError(f"user {name} is disabled here")
+        rec["role"] = role
+        rec["last_login"] = time.time()
+        _write(users)
+        return rec
+
+
 def set_password(username: str, password: str) -> dict:
     if len(password) < 8:
         raise UserError("the password must be at least 8 characters")
@@ -222,6 +271,13 @@ def set_password(username: str, password: str) -> dict:
         rec = users.get(_validate_username(username))
         if not rec:
             raise UserError(f"no such user: {username}")
+        if rec.get("source") not in (None, "local"):
+            # Giving an SSO record a password would quietly turn "the IdP is
+            # the only way in" into two ways in, one of which the IdP cannot
+            # revoke.
+            raise UserError(
+                f"{rec['username']} signs in via {rec['source']}; "
+                "it has no password to reset")
         rec["password_hash"] = hash_password(password)
         _write(users)
         return rec
