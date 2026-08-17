@@ -23,7 +23,8 @@ USERNAME="${USERNAME:-debian}"
 PASSWORD="${PASSWORD:-debian}"
 ROOT_SIZE="${ROOT_SIZE:-}"              # empty = profile default (3072, or the
                                         # desktop floor); see MIN_ROOT below
-BOOT_SIZE="${BOOT_SIZE:-512}"
+BOOT_SIZE="${BOOT_SIZE:-}"              # empty = profile default (512, or the
+                                        # desktop floor); see MIN_BOOT below
 ESP_SIZE="${ESP_SIZE:-128}"
 OVERLAY_MIN="${OVERLAY_MIN:-}"          # empty = from the state model; see below
 IMAGE_SIZE="${IMAGE_SIZE:-auto}"        # GiB, or "auto" = smallest possible
@@ -95,6 +96,9 @@ Usage: $0 [options]
   --root-size MiB         Size of each root slot (default: 3072, raised to the
                           distro/profile minimum -- a desktop build needs
                           10240; see the docs)
+  --boot-size MiB         Size of the shared /boot partition (default: 512;
+                          a desktop build defaults to 2048 -- it holds three
+                          copies of a firmware-heavy kernel+initramfs)
   --image-size GiB|auto   Total image size (default: auto = smallest possible;
                           the overlay partition expands to fill the target disk
                           on first boot either way)
@@ -165,6 +169,7 @@ while [[ $# -gt 0 ]]; do
         --username) USERNAME="$2"; shift 2;;
         --password) PASSWORD="$2"; shift 2;;
         --root-size) ROOT_SIZE="$2"; shift 2;;
+        --boot-size) BOOT_SIZE="$2"; shift 2;;
         --image-size) IMAGE_SIZE="$2"; shift 2;;
         --output) OUTPUT="$2"; shift 2;;
         --packages) EXTRA_PACKAGES="$2"; shift 2;;
@@ -514,6 +519,17 @@ esac
 if [ "$PROFILE" = desktop ]; then
     [ "$MIN_ROOT" -lt 10240 ] && MIN_ROOT=10240
 fi
+# The BOOT partition holds THREE copies of the kernel and initramfs: the
+# versioned originals where dpkg puts them, and the per-slot /A and /B copies
+# that make rollback carry its own kernel. A desktop initramfs is several
+# times a minimal one -- MODULES=most pulls the DRM drivers in, and with them
+# the amdgpu/nvidia firmware this profile installs -- so the historical 512
+# overflows at the per-slot copy with a bare ENOSPC. Found in the field on the
+# first real desktop build (2026-08-17), one line after "No error reported."
+MIN_BOOT=512
+if [ "$PROFILE" = desktop ]; then
+    MIN_BOOT=2048
+fi
 
 OS_PRETTY="$(tr '[:lower:]' '[:upper:]' <<< "${DISTRO:0:1}")${DISTRO:1}"
 HOSTNAME_="${HOSTNAME_:-${DISTRO}-ab}"
@@ -551,6 +567,14 @@ fi
 if [ -z "$ROOT_SIZE" ]; then
     ROOT_SIZE=3072
     [ "$ROOT_SIZE" -lt "$MIN_ROOT" ] && ROOT_SIZE="$MIN_ROOT"
+fi
+# Same shape for the boot partition: the historical 512 unless the profile's
+# floor is higher, an explicit value honoured subject to the raise below.
+if [ -z "$BOOT_SIZE" ]; then
+    BOOT_SIZE="$MIN_BOOT"
+elif [ "$BOOT_SIZE" -lt "$MIN_BOOT" ]; then
+    warn "boot partition ${BOOT_SIZE} MiB cannot hold three desktop-sized kernel+initramfs copies; using ${MIN_BOOT} MiB"
+    BOOT_SIZE="$MIN_BOOT"
 fi
 
 # Raise rather than refuse: the caller asked for an image, and a slot too small
@@ -1386,6 +1410,20 @@ log "Kernel version: $KVER"
 # replaces /A/vmlinuz in place. The versioned originals stay where dpkg put them
 # at the top of /boot, because that is where the kernel packages and
 # update-initramfs expect to find them.
+# Checked before copying, because the copy's own failure mode is a bare
+# "No space left on device" halfway through writing /B/initrd.img -- the
+# first real desktop build died exactly there, one line after GRUB said
+# "No error reported". Say what is too big and which knob fixes it.
+KIMG_KB=$(du -k "$BOOTMNT/vmlinuz-$KVER" | cut -f1)
+IIMG_KB=$(du -k "$BOOTMNT/initrd.img-$KVER" | cut -f1)
+NEED_KB=$(( 2 * (KIMG_KB + IIMG_KB) + 8192 ))   # two slot copies + slack
+FREE_KB=$(df -Pk "$BOOTMNT" | awk 'NR==2 {print $4}')
+if [ "$FREE_KB" -lt "$NEED_KB" ]; then
+    die "the ${BOOT_SIZE} MiB /boot partition cannot hold per-slot copies of this kernel+initramfs
+    (initramfs alone is $((IIMG_KB / 1024)) MiB; /boot needs three copies of both and has $((FREE_KB / 1024)) MiB free).
+    Rebuild with --boot-size $(( (NEED_KB - FREE_KB) / 1024 + BOOT_SIZE + 64 )) or larger.
+    Desktop-profile initramfs images carry DRM drivers and their firmware, which is most of the size."
+fi
 for sl in A B; do
     mkdir -p "$BOOTMNT/$sl"
     cp -a "$BOOTMNT/vmlinuz-$KVER"    "$BOOTMNT/$sl/vmlinuz"

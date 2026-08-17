@@ -29,6 +29,7 @@ Output lands in `./output/` (e.g. `debian-trixie-ab.img.zst`, `ubuntu-noble-ab.i
 | `--username` | `debian` | Login user (added to `sudo`) |
 | `--password` | `debian` | Password for that user |
 | `--root-size` | `3072` | MiB per root slot (raised to a per-distro minimum — see [Root slot sizing](#root-slot-sizing)) |
+| `--boot-size` | `512` (`2048` for desktop) | MiB for the shared `/boot` partition — it holds three kernel+initramfs copies, and a desktop initramfs carries DRM firmware |
 | `--image-size` | `auto` | Total image size in GiB; `auto` = smallest possible |
 | `--packages "a b"` | — | Extra packages to install |
 | `--ssh-pubkey FILE` | — | Install an authorized SSH key for the user (from a file) |
@@ -173,6 +174,15 @@ step: `linux-image-generic` already depends on the complete `linux-firmware`.
 above), so with two slots a desktop image is ≈21 GiB raw where a minimal one
 is ≈7 GiB. An explicit `--root-size` above the floor is honoured; below it, it
 is raised with a warning like any other slot too small for its OS.
+
+The `/boot` partition floor also rises, **512 → 2048 MiB**: it holds three
+copies of the kernel and initramfs (the versioned originals plus the per-slot
+`/A` and `/B` copies that make rollback carry its own kernel), and a desktop
+initramfs is several times a minimal one — `MODULES=most` pulls the DRM
+drivers in, and with them the graphics firmware this profile installs. The
+builder also checks the space before staging the per-slot copies and refuses
+with the `--boot-size` it actually needs, rather than dying on a bare
+"No space left on device" mid-copy.
 
 ## Customization
 
