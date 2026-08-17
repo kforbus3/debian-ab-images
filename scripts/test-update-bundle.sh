@@ -74,7 +74,7 @@ cleanup_luks() {
     done
     OPENED=""
 }
-trap 'cleanup_luks' EXIT
+trap 'cleanup_luks; rm -f "$DISK"' EXIT
 
 # Deliberately not a function returning a list: command substitution runs in a
 # subshell, so every mapper it opened would be invisible to cleanup_luks and
@@ -216,7 +216,7 @@ nginx &
 HTTPD=$!
 # Replaces the cleanup_luks trap, so it has to keep doing that job too --
 # otherwise a failure between here and the end leaves mappers open.
-trap 'kill $HTTPD 2>/dev/null; cleanup_luks' EXIT
+trap 'kill $HTTPD 2>/dev/null; cleanup_luks; rm -f "$DISK"' EXIT
 sleep 1
 # Fail here rather than 900 seconds into a boot that could never have worked.
 curl -fsS -o /dev/null -r 0-3 "http://127.0.0.1:${PORT}/bundles/$(basename "$BUNDLE")" \

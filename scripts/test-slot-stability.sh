@@ -70,6 +70,10 @@ fail() { echo "HARNESS-FAIL: $*"; exit 1; }
 
 rm -f "$DISK"; truncate -s "$SIZE" "$DISK"
 dd if="$SRC" of="$DISK" bs=4M conv=notrunc status=none || fail "dd"
+# Scratch only, and this test runs five times with five differently-named
+# disks; leaving them behind was the biggest single contributor to filling
+# the CI runner mid-suite (2026-08-16). Logs carry the evidence.
+trap 'rm -f "$DISK"' EXIT
 
 # What the imager does after writing: relocate the GPT backup header and grow
 # the overlay partition into the rest of the disk. Without this the guest's

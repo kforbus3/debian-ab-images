@@ -31,6 +31,8 @@ SIZE="${SIZE:-32G}"
 fail() { echo "HARNESS-FAIL: $*"; exit 1; }
 [ -f "$SRC" ] || fail "no $SRC"
 
+# Scratch only; logs carry the evidence (see the runner-disk note in ci.yml).
+trap 'rm -f "$DISK"' EXIT
 rm -f "$DISK"
 truncate -s "$SIZE" "$DISK"
 dd if="$SRC" of="$DISK" bs=4M conv=notrunc status=none || fail "dd"
